@@ -1,0 +1,194 @@
+{
+  "meta": {
+    "n_demos_used": 5,
+    "demos_used": [
+      "demo_000",
+      "demo_001",
+      "demo_002",
+      "demo_003",
+      "demo_004"
+    ],
+    "demos_excluded": {},
+    "sequence_tally": {
+      "pre | move | post": 5
+    },
+    "canonical_labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "theta": 0.15,
+    "c": 2.0,
+    "alpha": 1.0,
+    "max_feat": 4,
+    "pad": 2,
+    "sd_floor": 0.001,
+    "persist_min": 0.8,
+    "boundary_features_dropped": false,
+    "constant_features_dropped": []
+  },
+  "phases": {
+    "0": {
+      "label": "pre",
+      "features": [
+        "contact",
+        "eef_object_dist"
+      ],
+      "mean": [
+        1.0,
+        0.008935
+      ],
+      "std": [
+        0.0,
+        0.004784
+      ],
+      "v": [
+        0.0,
+        0.002026
+      ],
+      "type": [
+        "eq",
+        "le"
+      ],
+      "thresh": [
+        1.0,
+        0.018503
+      ],
+      "persistence": [
+        0.8535,
+        0.7826
+      ],
+      "persistent": [
+        true,
+        false
+      ],
+      "global_std": [
+        0.498568,
+        0.106278
+      ],
+      "boundary_t": [
+        266,
+        223,
+        139,
+        273,
+        220
+      ],
+      "d_start": 9.5513,
+      "sd_floor": 0.001
+    },
+    "1": {
+      "label": "move",
+      "features": [
+        "object_goal_dist",
+        "eef_object_dist"
+      ],
+      "mean": [
+        0.042294,
+        0.007958
+      ],
+      "std": [
+        0.001735,
+        0.004871
+      ],
+      "v": [
+        0.000104,
+        0.002101
+      ],
+      "type": [
+        "le",
+        "box"
+      ],
+      "thresh": [
+        0.045764,
+        0.009743
+      ],
+      "persistence": [
+        0.9911,
+        0.5342
+      ],
+      "persistent": [
+        true,
+        false
+      ],
+      "global_std": [
+        0.1698,
+        0.106278
+      ],
+      "boundary_t": [
+        415,
+        454,
+        273,
+        498,
+        434
+      ],
+      "d_start": 6.4693,
+      "sd_floor": 0.001
+    },
+    "2": {
+      "label": "post",
+      "features": [
+        "contact",
+        "gripper_open",
+        "object_goal_dist",
+        "eef_object_dist"
+      ],
+      "mean": [
+        0.0,
+        0.98751,
+        0.042901,
+        0.14672
+      ],
+      "std": [
+        0.0,
+        0.000149,
+        0.000719,
+        0.006622
+      ],
+      "v": [
+        0.0,
+        0.0,
+        1.8e-05,
+        0.003882
+      ],
+      "type": [
+        "eq",
+        "le",
+        "box",
+        "ge"
+      ],
+      "thresh": [
+        0.0,
+        0.98951,
+        0.002,
+        0.133476
+      ],
+      "persistence": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "persistent": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "global_std": [
+        0.498568,
+        0.597936,
+        0.1698,
+        0.106278
+      ],
+      "boundary_t": [
+        459,
+        483,
+        317,
+        527,
+        470
+      ],
+      "d_start": 3.6399,
+      "sd_floor": 0.001
+    }
+  }
+}

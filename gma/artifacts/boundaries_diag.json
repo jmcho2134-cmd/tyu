@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "n_demos": 5,
+    "sequence_tally": {
+      "pre | move | post": 5
+    },
+    "modal_sequence": "pre | move | post",
+    "agreement": 1.0,
+    "gate_g3": 0.7,
+    "gate_pass": true
+  },
+  "demos": {
+    "demo_000": {
+      "level1": {
+        "mode": "object_centric",
+        "eps_hi": 0.005,
+        "eps_lo": 0.001,
+        "noise_mad": 3.8e-05,
+        "rest": 0.5138,
+        "final": 0.0423,
+        "t_detect": 278,
+        "t_start": 266,
+        "t_settle": 415,
+        "min_run": 4
+      },
+      "level2": {}
+    },
+    "demo_001": {
+      "level1": {
+        "mode": "object_centric",
+        "eps_hi": 0.005,
+        "eps_lo": 0.001,
+        "noise_mad": 2.9e-05,
+        "rest": 0.4512,
+        "final": 0.0436,
+        "t_detect": 223,
+        "t_start": 223,
+        "t_settle": 454,
+        "min_run": 4
+      },
+      "level2": {}
+    },
+    "demo_002": {
+      "level1": {
+        "mode": "object_centric",
+        "eps_hi": 0.005,
+        "eps_lo": 0.001,
+        "noise_mad": 2.5e-05,
+        "rest": 0.3054,
+        "final": 0.0423,
+        "t_detect": 148,
+        "t_start": 139,
+        "t_settle": 273,
+        "min_run": 3
+      },
+      "level2": {}
+    },
+    "demo_003": {
+      "level1": {
+        "mode": "object_centric",
+        "eps_hi": 0.005,
+        "eps_lo": 0.001,
+        "noise_mad": 1.7e-05,
+        "rest": 0.5248,
+        "final": 0.0424,
+        "t_detect": 299,
+        "t_start": 273,
+        "t_settle": 498,
+        "min_run": 5
+      },
+      "level2": {}
+    },
+    "demo_004": {
+      "level1": {
+        "mode": "object_centric",
+        "eps_hi": 0.005,
+        "eps_lo": 0.001,
+        "noise_mad": 0.000143,
+        "rest": 0.3598,
+        "final": 0.044,
+        "t_detect": 222,
+        "t_start": 220,
+        "t_settle": 434,
+        "min_run": 4
+      },
+      "level2": {}
+    }
+  }
+}

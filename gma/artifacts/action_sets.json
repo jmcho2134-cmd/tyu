@@ -1,0 +1,236 @@
+{
+  "phase_0": [
+    {
+      "candidate_id": "p0_c000",
+      "name": "axis[dz+]",
+      "direction": [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subspace": "position",
+      "start_fraction": 0.026,
+      "duration_fraction": 0.522,
+      "predicted_drho": -0.0583,
+      "uncertainty": 0.0135,
+      "screening_score": 0.0448
+    },
+    {
+      "candidate_id": "p0_c001",
+      "name": "rand3",
+      "direction": [
+        -0.074424,
+        0.349449,
+        0.271856,
+        -0.732122,
+        -0.510109,
+        -0.047195,
+        0.0
+      ],
+      "subspace": "rotation",
+      "start_fraction": 0.446,
+      "duration_fraction": 0.102,
+      "predicted_drho": -0.0523,
+      "uncertainty": 0.0187,
+      "screening_score": 0.0336
+    },
+    {
+      "candidate_id": "p0_c002",
+      "name": "rand4",
+      "direction": [
+        0.06578,
+        0.066913,
+        0.652077,
+        -0.342388,
+        -0.116264,
+        0.628964,
+        0.199118
+      ],
+      "subspace": "mixed",
+      "start_fraction": 0.446,
+      "duration_fraction": 0.102,
+      "predicted_drho": -0.0477,
+      "uncertainty": 0.0147,
+      "screening_score": 0.0329
+    },
+    {
+      "candidate_id": "p0_c003",
+      "name": "rand2",
+      "direction": [
+        -0.41406,
+        0.514309,
+        0.034115,
+        -0.251171,
+        -0.671529,
+        -0.220885,
+        0.006993
+      ],
+      "subspace": "mixed",
+      "start_fraction": 0.445,
+      "duration_fraction": 0.103,
+      "predicted_drho": -0.0393,
+      "uncertainty": 0.0164,
+      "screening_score": 0.023
+    }
+  ],
+  "phase_1": [
+    {
+      "candidate_id": "p1_c000",
+      "name": "axis[dz+]",
+      "direction": [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subspace": "position",
+      "start_fraction": 0.029,
+      "duration_fraction": 0.94,
+      "predicted_drho": -0.0771,
+      "uncertainty": 0.0147,
+      "screening_score": 0.0624
+    },
+    {
+      "candidate_id": "p1_c001",
+      "name": "rand0",
+      "direction": [
+        -0.066488,
+        -0.87189,
+        -0.090691,
+        0.088119,
+        0.032842,
+        -0.467245,
+        0.0
+      ],
+      "subspace": "position",
+      "start_fraction": 0.024,
+      "duration_fraction": 0.106,
+      "predicted_drho": -0.0256,
+      "uncertainty": 0.011,
+      "screening_score": 0.0146
+    },
+    {
+      "candidate_id": "p1_c002",
+      "name": "rand5",
+      "direction": [
+        -0.554815,
+        -0.04119,
+        -0.166925,
+        0.290293,
+        0.072499,
+        -0.610614,
+        -0.447487
+      ],
+      "subspace": "mixed",
+      "start_fraction": 0.024,
+      "duration_fraction": 0.946,
+      "predicted_drho": -0.0055,
+      "uncertainty": 0.0099,
+      "screening_score": -0.0044
+    },
+    {
+      "candidate_id": "p1_c003",
+      "name": "axis[drx+]",
+      "direction": [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subspace": "rotation",
+      "start_fraction": 0.024,
+      "duration_fraction": 0.944,
+      "predicted_drho": -0.0038,
+      "uncertainty": 0.01,
+      "screening_score": -0.0061
+    }
+  ],
+  "phase_2": [
+    {
+      "candidate_id": "p2_c000",
+      "name": "antipara",
+      "direction": [
+        -0.0,
+        -0.0,
+        -0.434573,
+        -0.0,
+        -0.0,
+        -0.0,
+        0.900637
+      ],
+      "subspace": "gripper",
+      "start_fraction": 0.017,
+      "duration_fraction": 0.767,
+      "predicted_drho": -0.053,
+      "uncertainty": 0.0113,
+      "screening_score": 0.0416
+    },
+    {
+      "candidate_id": "p2_c001",
+      "name": "rand5",
+      "direction": [
+        0.156756,
+        0.358747,
+        -0.358923,
+        -0.580569,
+        0.145218,
+        0.599795,
+        0.0
+      ],
+      "subspace": "rotation",
+      "start_fraction": 0.0,
+      "duration_fraction": 0.783,
+      "predicted_drho": -0.0577,
+      "uncertainty": 0.0187,
+      "screening_score": 0.0389
+    },
+    {
+      "candidate_id": "p2_c002",
+      "name": "rand0",
+      "direction": [
+        0.524542,
+        0.403451,
+        -0.379994,
+        -0.000622,
+        0.264454,
+        0.278005,
+        0.520063
+      ],
+      "subspace": "mixed",
+      "start_fraction": 0.0,
+      "duration_fraction": 0.783,
+      "predicted_drho": -0.0585,
+      "uncertainty": 0.0213,
+      "screening_score": 0.0371
+    },
+    {
+      "candidate_id": "p2_c003",
+      "name": "axis[dx+]",
+      "direction": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "subspace": "position",
+      "start_fraction": 0.004,
+      "duration_fraction": 0.779,
+      "predicted_drho": -0.0029,
+      "uncertainty": 0.0129,
+      "screening_score": -0.01
+    }
+  ]
+}

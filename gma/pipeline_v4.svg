@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1560" width="1080" height="1560" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7a8290"/>
+    </marker>
+    <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f7f6f"/>
+    </marker>
+    <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a8674a"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="1560" fill="#faf9f7"/>
+
+  <text x="44" y="52" font-size="26" font-weight="600" fill="#20242b">BfD Pipeline v4</text>
+  <text x="44" y="76" font-size="13.5" fill="#6b7280">Structured Degradation from Suboptimal Demonstrations · robosuite PickPlaceBread / UR5e / OSC_POSE</text>
+
+  <!-- legend -->
+  <g font-size="11.5" fill="#6b7280">
+    <rect x="700" y="38" width="12" height="12" rx="2" fill="#ffffff" stroke="#c9cdd4"/>
+    <text x="718" y="48">기존 코드</text>
+    <rect x="790" y="38" width="12" height="12" rx="2" fill="#e8f2ee" stroke="#3f7f6f"/>
+    <text x="808" y="48">신규 · 검증완료</text>
+    <rect x="920" y="38" width="12" height="12" rx="2" fill="#fbeee7" stroke="#a8674a"/>
+    <text x="938" y="48">개조 필요 / 미구현</text>
+  </g>
+  <line x1="44" y1="92" x2="1036" y2="92" stroke="#e3e1dd" stroke-width="1.5"/>
+
+  <!-- ============ column guides ============ -->
+  <text x="60" y="118" font-size="11.5" font-weight="600" fill="#9aa1ab" letter-spacing="1">STAGE</text>
+  <text x="690" y="118" font-size="11.5" font-weight="600" fill="#9aa1ab" letter-spacing="1">ARTIFACT</text>
+
+  <!-- ===== S1 ===== -->
+  <g>
+    <rect x="44" y="132" width="590" height="62" rx="7" fill="#ffffff" stroke="#c9cdd4" stroke-width="1.3"/>
+    <text x="62" y="156" font-size="14.5" font-weight="600" fill="#20242b">1 · 데모 수집</text>
+    <text x="62" y="177" font-size="12" fill="#6b7280">collect_demo.py — teleop, 성공하되 비효율적, N ≥ 10</text>
+    <rect x="678" y="140" width="358" height="46" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="159" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">demo.hdf5</text>
+    <text x="694" y="176" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">states(T,77) actions(T,7) torques(T,8) model_xml</text>
+  </g>
+  <line x1="339" y1="194" x2="339" y2="216" stroke="#7a8290" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- ===== S2 ===== -->
+  <g>
+    <rect x="44" y="216" width="590" height="62" rx="7" fill="#ffffff" stroke="#c9cdd4" stroke-width="1.3"/>
+    <text x="62" y="240" font-size="14.5" font-weight="600" fill="#20242b">2 · 사람의 정의  <tspan font-size="11" font-weight="400" fill="#a8674a">유일한 human prior</tspan></text>
+    <text x="62" y="261" font-size="12" fill="#6b7280">feature_select.py — FeatureSpec(name, kind, boundary, reward_input, heldout)</text>
+    <rect x="678" y="224" width="358" height="46" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="243" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">FEATURES / BOUNDARY / SUBGOAL_ELIGIBLE</text>
+    <text x="694" y="260" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">kind ∈ {progress, event, quality}</text>
+  </g>
+  <line x1="339" y1="278" x2="339" y2="300" stroke="#7a8290" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- ===== S3 ===== -->
+  <g>
+    <rect x="44" y="300" width="590" height="62" rx="7" fill="#e8f2ee" stroke="#3f7f6f" stroke-width="1.3"/>
+    <text x="62" y="324" font-size="14.5" font-weight="600" fill="#1f3f37">3 · feature 추출</text>
+    <text x="62" y="345" font-size="12" fill="#3f6259">extract_features.py — ★ robosuite 가 필요한 유일한 지점</text>
+    <rect x="678" y="308" width="358" height="46" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="327" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">cache/demo_XXX.npz</text>
+    <text x="694" y="344" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">F(T,N) names actions goal dt</text>
+  </g>
+  <line x1="339" y1="362" x2="339" y2="384" stroke="#3f7f6f" stroke-width="1.6" marker-end="url(#arB)"/>
+  <text x="352" y="378" font-size="10.5" fill="#3f7f6f">이후 전부 순수 numpy</text>
+
+  <!-- ===== S4 ===== -->
+  <g>
+    <rect x="44" y="384" width="590" height="92" rx="7" fill="#e8f2ee" stroke="#3f7f6f" stroke-width="1.3"/>
+    <text x="62" y="408" font-size="14.5" font-weight="600" fill="#1f3f37">4 · 계층적 phase 분할</text>
+    <text x="62" y="428" font-size="12" fill="#3f6259">segment_hier.py + run_boundaries.py</text>
+    <text x="62" y="447" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">L1 객체 |d/dt object_goal_dist| → t_lift, t_settle</text>
+    <text x="62" y="464" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">L2 상호작용 → b1, b4 · knee 는 [t_lift, b4] 안에서만</text>
+    <rect x="678" y="392" width="358" height="46" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="411" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">boundaries.json  (+ _diag.json)</text>
+    <text x="694" y="428" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">T bounds labels subgoal_per_phase</text>
+    <rect x="678" y="446" width="358" height="24" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="462" font-size="11" fill="#8a6d1f">▶ GATE 3 — 라벨 시퀀스 일치율 ≥ 70%</text>
+  </g>
+  <line x1="339" y1="476" x2="339" y2="498" stroke="#3f7f6f" stroke-width="1.6" marker-end="url(#arB)"/>
+
+  <!-- ===== S5 ===== -->
+  <g>
+    <rect x="44" y="498" width="590" height="110" rx="7" fill="#e8f2ee" stroke="#3f7f6f" stroke-width="1.8"/>
+    <text x="62" y="522" font-size="14.5" font-weight="600" fill="#1f3f37">5 · subgoal 자동 추론</text>
+    <text x="62" y="542" font-size="12" fill="#3f6259">subgoal_discover.py → rho.py</text>
+    <text x="62" y="562" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">v = Var_i[φ(t_k)] / Var_i,t[φ]   →  조건 feature</text>
+    <text x="62" y="579" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">ε = c·σ                          →  허용 오차</text>
+    <text x="62" y="596" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">persistence                      →  satisfies 용 분리</text>
+    <rect x="678" y="506" width="358" height="60" rx="5" fill="#eef3fa" stroke="#7b93b8" stroke-width="1.4"/>
+    <text x="694" y="525" font-size="11.5" font-family="ui-monospace, Menlo, monospace" font-weight="600" fill="#2c4a72">★ subgoal.json — 단일 진리원</text>
+    <text x="694" y="542" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#5a708f">features mean std v type thresh</text>
+    <text x="694" y="558" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#5a708f">persistent d_start sd_floor</text>
+    <rect x="678" y="574" width="358" height="24" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="590" font-size="11" fill="#8a6d1f">▶ GATE 4·5 — 순환성 ablation · 역행 &lt; 5%</text>
+  </g>
+
+  <!-- rho fan-out -->
+  <line x1="339" y1="608" x2="339" y2="640" stroke="#3f7f6f" stroke-width="1.6"/>
+  <rect x="212" y="640" width="254" height="42" rx="6" fill="#eef3fa" stroke="#7b93b8" stroke-width="1.4"/>
+  <text x="230" y="659" font-size="12.5" font-weight="600" fill="#2c4a72">rho.py — 유일한 소비 창구</text>
+  <text x="230" y="675" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#5a708f">ρ_k(s,g) · satisfies(k,s,g) · phase_of(s,g)</text>
+  <path d="M 339 682 L 339 700" stroke="#3f7f6f" stroke-width="1.6" marker-end="url(#arB)"/>
+
+  <!-- ===== FCM block ===== -->
+  <rect x="36" y="708" width="1000" height="212" rx="9" fill="#fdfbf8" stroke="#d9d5cd" stroke-dasharray="5 4"/>
+  <text x="1020" y="730" font-size="11" text-anchor="end" fill="#a8674a" font-weight="600">각 phase 에 어떻게 주입할까 — 학습 구간</text>
+
+  <g>
+    <rect x="52" y="722" width="582" height="86" rx="7" fill="#fbeee7" stroke="#a8674a" stroke-width="1.3"/>
+    <text x="70" y="746" font-size="14.5" font-weight="600" fill="#5e3623">6 · FCM 데이터 수집 + 학습</text>
+    <text x="70" y="766" font-size="12" fill="#7a4f38">fcm.py — 동일 state 분기: A = demo action, B = + perturbation</text>
+    <text x="70" y="785" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">주입: Gaussian / 좌표축 / 랜덤 단위벡터 / 데모 평행</text>
+    <text x="70" y="802" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">출력: r(t,h) = φ_pert(t+h) − φ_demo(t+h)</text>
+    <rect x="678" y="730" width="342" height="44" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="748" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">fcm_dataset.hdf5 → fcm_ensemble.pt</text>
+    <text x="694" y="765" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">FCMSample · residual (H,F) · feasibility</text>
+    <rect x="678" y="782" width="342" height="24" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="798" font-size="11" fill="#8a6d1f">▶ GATE 6 — λ=0 → residual ≈ 0</text>
+  </g>
+  <line x1="343" y1="808" x2="343" y2="828" stroke="#a8674a" stroke-width="1.6" marker-end="url(#arR)"/>
+
+  <g>
+    <rect x="52" y="828" width="582" height="76" rx="7" fill="#fbeee7" stroke="#a8674a" stroke-width="1.3"/>
+    <text x="70" y="852" font-size="14.5" font-weight="600" fill="#5e3623">7 · 방해 action 집합 도출</text>
+    <text x="70" y="873" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">d*_z = argmin_d  ρ_z( φ + FCM(s, a, λ_probe·d) )</text>
+    <text x="70" y="893" font-size="12" fill="#7a4f38">불확실성 penalty + diversity → phase 별 Top-K</text>
+    <rect x="678" y="836" width="342" height="42" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="854" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">action_sets.json</text>
+    <text x="694" y="871" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">direction · subspace · start/duration · score</text>
+    <rect x="678" y="882" width="342" height="22" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="897" font-size="11" fill="#8a6d1f">▶ GATE 7 — Top-K recall &gt; random</text>
+  </g>
+  <line x1="343" y1="920" x2="343" y2="944" stroke="#a8674a" stroke-width="1.6" marker-end="url(#arR)"/>
+
+  <!-- ===== S8 ===== -->
+  <g>
+    <rect x="44" y="944" width="590" height="98" rx="7" fill="#fbeee7" stroke="#a8674a" stroke-width="1.3"/>
+    <text x="62" y="968" font-size="14.5" font-weight="600" fill="#5e3623">8 · 열화 궤적 생성  <tspan font-size="11" font-weight="400" fill="#8a6d1f">SSRR 골격</tspan></text>
+    <text x="62" y="988" font-size="12" fill="#7a4f38">degradation.py — 정책 = 데모추종 closed-loop (λ=0 이 데모 재현)</text>
+    <text x="62" y="1008" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">a'_t = clip( a_demo(t) + λ·mask(t)·d*_z )</text>
+    <text x="62" y="1025" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">λ: bracketing → binary search → λ_max · 5 levels</text>
+    <rect x="678" y="952" width="358" height="42" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="970" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">degradation.npz — DegradationFamily</text>
+    <text x="694" y="987" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">λ_max · levels · trajectories · ρ_endpoint</text>
+    <rect x="678" y="1000" width="358" height="34" rx="4" fill="#f7ecec" stroke="#c08b8b"/>
+    <text x="694" y="1014" font-size="11" fill="#8c4a4a">✗ sigmoid 캘리브레이션 없음</text>
+    <text x="694" y="1029" font-size="10.5" fill="#a06b6b">Stage 9 실측이 대체 · 단조성 가정도 소거</text>
+  </g>
+  <line x1="339" y1="1042" x2="339" y2="1064" stroke="#a8674a" stroke-width="1.6" marker-end="url(#arR)"/>
+
+  <!-- ===== S9 ===== -->
+  <g>
+    <rect x="44" y="1064" width="590" height="84" rx="7" fill="#ffffff" stroke="#c9cdd4" stroke-width="1.3"/>
+    <text x="62" y="1088" font-size="14.5" font-weight="600" fill="#20242b">9 · simulator 실측 + 선호 랭킹</text>
+    <text x="62" y="1108" font-size="12" fill="#6b7280">rollout_exec.py — success · goal 오차 · path length · slip · jerk</text>
+    <text x="62" y="1130" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#2c4a72">라벨 = 실측 Δ    (λ 는 생성 노브일 뿐, 라벨 아님)</text>
+    <rect x="678" y="1072" width="358" height="42" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="1090" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">preference.hdf5</text>
+    <text x="694" y="1107" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">pairs(i,j,phase,margin) · trajs · measured/</text>
+    <rect x="678" y="1120" width="358" height="22" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="1135" font-size="11" fill="#8a6d1f">▶ GATE 8 — monotonicity · gradedness · success</text>
+  </g>
+  <line x1="339" y1="1148" x2="339" y2="1170" stroke="#7a8290" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- ===== S10 ===== -->
+  <g>
+    <rect x="44" y="1170" width="590" height="80" rx="7" fill="#fbeee7" stroke="#a8674a" stroke-width="1.3"/>
+    <text x="62" y="1194" font-size="14.5" font-weight="600" fill="#5e3623">10 · reward 학습</text>
+    <text x="62" y="1214" font-size="12" fill="#7a4f38">reward_learning.py — pairwise ranking loss</text>
+    <text x="62" y="1235" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">R_θ(s,a,s',g,z)  ✗ action_magnitude, energy 제외</text>
+    <rect x="678" y="1178" width="358" height="42" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="1196" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">reward.pt</text>
+    <text x="694" y="1213" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">phase-conditioned · ensemble</text>
+    <rect x="678" y="1226" width="358" height="22" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="1241" font-size="11" fill="#8a6d1f">▶ GATE 9 — heldout preference accuracy</text>
+  </g>
+  <line x1="339" y1="1250" x2="339" y2="1272" stroke="#a8674a" stroke-width="1.6" marker-end="url(#arR)"/>
+
+  <!-- ===== S11 ===== -->
+  <g>
+    <rect x="44" y="1272" width="590" height="96" rx="7" fill="#fbeee7" stroke="#a8674a" stroke-width="1.8" stroke-dasharray="6 3"/>
+    <text x="62" y="1296" font-size="14.5" font-weight="600" fill="#5e3623">11 · SAC + HER → BTD  <tspan font-size="11" font-weight="400" fill="#a06b6b">미구현</tspan></text>
+    <text x="62" y="1318" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">r = r_env(sparse) + γΦ(s') − Φ(s)</text>
+    <text x="62" y="1335" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">Φ(s,g) = c·( phase_of(s,g) + ρ_k(s,g) )</text>
+    <text x="62" y="1356" font-size="12" fill="#7a4f38">(선택) FCM argmax 가속 — on-policy 갱신 필요</text>
+    <rect x="678" y="1280" width="358" height="42" rx="5" fill="#f2f1ee" stroke="#dcdad5"/>
+    <text x="694" y="1298" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#4a5058">policy.pt</text>
+    <text x="694" y="1315" font-size="10.5" font-family="ui-monospace, Menlo, monospace" fill="#8b919b">Φ 가 상태만의 함수 → 데모 수준에 상한 없음</text>
+    <rect x="678" y="1328" width="358" height="34" rx="4" fill="#fdf6e8" stroke="#d8b45f"/>
+    <text x="694" y="1342" font-size="11" fill="#8a6d1f">▶ GATE 10 — 같은 시드에서 정책 vs 데모</text>
+    <text x="694" y="1356" font-size="10.5" fill="#a08a4f">BTD 는 실험으로 검증. 설계로 보장되지 않음</text>
+  </g>
+
+  <!-- FCM reuse arrow -->
+  <path d="M 1024 862 C 1062 862 1062 1320 1042 1320" fill="none" stroke="#a8674a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arR)"/>
+  <text x="1050" y="1090" font-size="10.5" fill="#a8674a" transform="rotate(90 1050 1090)">FCM 재사용 · argmin → argmax</text>
+
+  <!-- footer -->
+  <line x1="44" y1="1400" x2="1036" y2="1400" stroke="#e3e1dd" stroke-width="1.5"/>
+  <text x="44" y="1424" font-size="12.5" font-weight="600" fill="#4a5058">FCM 의 두 가지 사용</text>
+  <text x="44" y="1446" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#5e3623">Stage 7   d* = argmin_d  ρ_z( φ + FCM(s,a,λ·d) )      subgoal 을 가장 방해하는 방향</text>
+  <text x="44" y="1465" font-size="11.5" font-family="ui-monospace, Menlo, monospace" fill="#5e3623">Stage 11  a* = argmax_a  R_θ( φ + FCM(s,a,0) )        R_θ 를 가장 올리는 방향</text>
+  <text x="44" y="1492" font-size="11.5" fill="#6b7280">FCM 은 <tspan font-weight="600" fill="#4a5058">물리적 결과</tspan>만 안다. 좋고 나쁨은 ρ 와 R_θ 가 판단한다.</text>
+
+  <text x="44" y="1522" font-size="12.5" font-weight="600" fill="#4a5058">현재 위치</text>
+  <text x="44" y="1543" font-size="11.5" fill="#6b7280">Stage 3–5 구현 완료 · 합성 데이터 검증 통과 · <tspan font-weight="600" fill="#8a6d1f">실데모로 GATE 3 판정 대기</tspan></text>
+</svg>

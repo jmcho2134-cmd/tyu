@@ -1,0 +1,132 @@
+{
+  "demo_000": {
+    "T": 460,
+    "bounds": [
+      266,
+      415
+    ],
+    "labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "subgoal_per_phase": [
+      [
+        "eef_object_dist",
+        1.0
+      ],
+      [
+        "object_goal_dist",
+        1.0
+      ],
+      [
+        "eef_object_dist",
+        -1.0
+      ]
+    ]
+  },
+  "demo_001": {
+    "T": 484,
+    "bounds": [
+      223,
+      454
+    ],
+    "labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "subgoal_per_phase": [
+      [
+        "eef_object_dist",
+        1.0
+      ],
+      [
+        "object_goal_dist",
+        1.0
+      ],
+      [
+        "eef_object_dist",
+        -1.0
+      ]
+    ]
+  },
+  "demo_002": {
+    "T": 318,
+    "bounds": [
+      139,
+      273
+    ],
+    "labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "subgoal_per_phase": [
+      [
+        "eef_object_dist",
+        1.0
+      ],
+      [
+        "object_goal_dist",
+        1.0
+      ],
+      [
+        "eef_object_dist",
+        -1.0
+      ]
+    ]
+  },
+  "demo_003": {
+    "T": 528,
+    "bounds": [
+      273,
+      498
+    ],
+    "labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "subgoal_per_phase": [
+      [
+        "eef_object_dist",
+        1.0
+      ],
+      [
+        "object_goal_dist",
+        1.0
+      ],
+      [
+        "eef_object_dist",
+        -1.0
+      ]
+    ]
+  },
+  "demo_004": {
+    "T": 471,
+    "bounds": [
+      220,
+      434
+    ],
+    "labels": [
+      "pre",
+      "move",
+      "post"
+    ],
+    "subgoal_per_phase": [
+      [
+        "eef_object_dist",
+        1.0
+      ],
+      [
+        "object_goal_dist",
+        1.0
+      ],
+      [
+        "eef_object_dist",
+        -1.0
+      ]
+    ]
+  }
+}
