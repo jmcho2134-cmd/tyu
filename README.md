@@ -1,39 +1,4 @@
-PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\fcm.py train --hidden 256 256 --max-iter 2000
-[G6] PASS: ρ_worst 공간 drift/effect 최대 0.075 (phase 0 [pre]) <= 0.3, anchor drop 5% <= 50%
-     phase 0 [pre  ] drift_ρ=0.0072 effect_ρ=0.0955 ratio=0.075 (λ=0 736행 / λ>0 12752행)
-           drift 분포: 중앙 0.00000  95% 0.0005  최대 0.0535
-           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00718 ratio=0.075
-     phase 1 [move ] drift_ρ=0.0025 effect_ρ=1.0484 ratio=0.002 (λ=0 504행 / λ>0 8648행)
-           drift 분포: 중앙 0.00026  95% 0.0015  최대 0.0235
-           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00255 ratio=0.002
-     phase 2 [post ] drift_ρ=0.0023 effect_ρ=0.7415 ratio=0.003 (λ=0 576행 / λ>0 10072행)
-           drift 분포: 중앙 0.00078  95% 0.0041  최대 0.0110
-           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00231 ratio=0.003
-     [진단] raw feature 비율 (분모가 δ 무관 방향까지 포함해 희석됨): eef_object_dist=0.080, object_goal_dist=0.035, gripper_open=0.489, contact=0.000
-  member 0: fitted (val loss 0.8330)
-  member 1: fitted (val loss 0.8257)
-  member 2: fitted (val loss 0.8517)
-  member 3: fitted (val loss 0.8288)
-  member 4: fitted (val loss 0.8475)
-[train] heldout R^2 (rollout 단위 분할):
-    eef_object_dist    +0.383
-    object_goal_dist   +0.323
-    gripper_open       +0.603
-    contact            +0.346
-    grasp_align        +0.539
-    object_height      +0.405
-    eef_speed          +0.820
-    object_speed       +0.461
-    action_magnitude   +0.898
-    eef_accel          +0.773
-    eef_jerk           +0.708
-    object_slip        +0.687
-    eef_ang_speed      +0.978
-    object_ang_speed   +0.722
-    energy               n/a
-[plot] ./artifacts\fcm_fit_r2.png
-[out] ./artifacts\fcm_ensemble.pkl
-PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\fcm.py screen
+PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\fcm.py screen --g7-reuse
   phase 0 [pre]
     cone blocked: grip-
     rand2            drho=-0.044  unc=0.035  score=+0.009
@@ -52,13 +17,21 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\fcm.py screen
     axis[dz+]        drho=-0.662  unc=0.118  score=+0.544
     rand4            drho=-0.721  unc=0.197  score=+0.524
     antipara         drho=-0.222  unc=0.054  score=+0.169
-[out] ./artifacts\action_sets.json
+[out] ./artifacts\action_sets.json  (예측 기준 사본: ./artifacts\action_sets_predicted.json)
 [plot] ./artifacts\fcm_sets.png
-[env] PickPlaceBread / ['UR5e']
-
-
-
-
+[G7] 저장된 실측 재사용: ./artifacts\g7_diag.json
+[G7] 실측 재사용 모드: 시뮬레이터를 돌리지 않고 3 phase 의 저장된 측정값을 쓴다
+  phase 0: recall = 0.50 (random 0.40; pool 10, 출하 2개)
+     실측 재랭킹 → ['axis[dry+]', 'axis[dz+]', 'axis[dy+]', 'rand1']
+  phase 1: recall = 0.50 (random 0.40; pool 10, 출하 4개)
+     [유령] 예측 강함 / 실측 0 근방 — 제외: axis[grip-](예측 -1.290 → 실측 +0.0002), rand2(예측 -0.601 → 실측 +0.0131), rand1(예측 -0.384 → 실측 +0.0270)
+     실측 재랭킹 → ['rand0', 'axis[dz+]', 'steepest', 'rand5']
+  phase 2: recall = 0.75 (random 0.40; pool 10, 출하 4개)
+     실측 재랭킹 → ['rand1', 'rand4', 'axis[dz+]', 'axis[grip+]']
+[G7] PASS: mean recall 0.58 vs random 0.40
+[G7] action_sets.json 을 실측 기준으로 재작성: {'phase_0': 4, 'phase_1': 4, 'phase_2': 4}
+     (예측 기준 집합은 action_sets_predicted.json 에 보존)
+[out] ./artifacts\g7_diag.json
 PS C:\Users\Administrator\Desktop\tyu-main\gma> python -c "import json;d=json.load(open('artifacts/g7_diag.json'));print(json.dumps(d,indent=1,ensure_ascii=False))"
 {
  "g7_pass": true,
@@ -83,10 +56,18 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python -c "import json;d=json.lo
     "axis[drz+]": -0.0023,
     "axis[dx+]": 0.0214
    },
-   "shipped": [
+   "shipped_predicted": [
     "axis[dz+]",
     "rand2"
-   ]
+   ],
+   "shipped_measured": [
+    "axis[dry+]",
+    "axis[dz+]",
+    "axis[dy+]",
+    "rand1"
+   ],
+   "ghosts": [],
+   "filter_applied": true
   },
   "phase_1": {
    "recall": 0.5,
@@ -106,12 +87,24 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python -c "import json;d=json.lo
     "axis[drx+]": 0.0148,
     "axis[dry+]": -0.0177
    },
-   "shipped": [
+   "shipped_predicted": [
     "axis[dz+]",
     "axis[grip-]",
     "rand2",
     "steepest"
-   ]
+   ],
+   "shipped_measured": [
+    "rand0",
+    "axis[dz+]",
+    "steepest",
+    "rand5"
+   ],
+   "ghosts": [
+    "axis[grip-]",
+    "rand2",
+    "rand1"
+   ],
+   "filter_applied": true
   },
   "phase_2": {
    "recall": 0.75,
@@ -131,20 +124,21 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python -c "import json;d=json.lo
     "axis[drz+]": 0.0412,
     "axis[dry+]": -0.3186
    },
-   "shipped": [
+   "shipped_predicted": [
     "antipara",
     "axis[dz+]",
     "rand1",
     "rand4"
-   ]
+   ],
+   "shipped_measured": [
+    "rand1",
+    "rand4",
+    "axis[dz+]",
+    "axis[grip+]"
+   ],
+   "ghosts": [],
+   "filter_applied": true
   }
  }
 }
 PS C:\Users\Administrator\Desktop\tyu-main\gma> 
-
-[warn] feature_select: torque/qvel missing -> energy column is identically 0. Torque is NOT recoverable by state replay; record it during collection or fall back to frame_extract.inverse_dynamics_torque().
-  phase 0: recall = 0.50 (random 0.40; pool 10, 출하 2개)
-  phase 1: recall = 0.50 (random 0.40; pool 10, 출하 4개)
-  phase 2: recall = 0.75 (random 0.40; pool 10, 출하 4개)
-[G7] PASS: mean recall 0.58 vs random 0.40
-[out] ./artifacts\g7_diag.json
