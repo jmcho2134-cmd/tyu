@@ -1,1 +1,62 @@
-# tyu
+PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\subgoal_discover.py
+[discover] 20 demos, canonical = pre | move | post
+  phase 0 [pre      ] d_start=9.3221   contact eq 1*, eef_object_dist le 0.01809*
+  phase 1 [move     ] d_start=6.7393   object_goal_dist le 0.0464*, eef_object_dist box 0.008994
+  phase 2 [post     ] d_start=4.5137   contact eq 0*, gripper_open le 0.9894*, object_goal_dist box 0.002189*, eef_object_dist ge 0.1398*
+  (* = persistent -> phase_of/satisfies 에 사용)
+[out] ./artifacts/subgoal.json
+
+==============================================================================
+추론된 SUBGOAL  (Stage 5 산출물 · 단일 진리원)
+==============================================================================
+데모 20편 사용 / 제외 없음      canonical: pre | move | post
+하이퍼파라미터: theta=0.15  c=2.0  alpha=1.0  max_feat=4  persist_min=0.8
+
+── phase 0  [pre]  ─────────────────────────────────────────────────────── 경계 t=[211, 217, 248, 208, 215, 145, 211, 156, 153, 102, 234, 192, 198, 124, 214, 190, 196, 204, 201, 202]
+  달성 조건 (AND — 하나라도 깨지면 subgoal 미달):
+    ★ contact == 1                       v=0.0000  persist=0.84  scale=0.5
+    ★ eef_object_dist <= 0.01809         v=0.0019  persist=0.80  scale=0.024375
+    ★ = persistent (2/2) → phase_of · satisfies 판정에 사용
+    satisfies(0) ≡ contact == 1  AND  eef_object_dist <= 0.01809
+  ρ 정규화: d_start=9.3221 (RMS·전역)   d_start_cond=[1.0, 12.676] (조건별)
+  민감도 (달성 상태 ρ=1.000 / ρ_worst=1.000). 각 조건을 'phase 시작과 같은 수준'으로
+           위반시킨다 — 조건들 사이에 동등하게 심각한 사건이다:
+    contact            Δρ=-0.152   Δρ_worst=-0.841   satisfies→False
+    eef_object_dist    Δρ=-0.988   Δρ_worst=-0.841   satisfies→False
+    → 동등 심각도 조건 2개의 편차:  ρ 6.5배  vs  ρ_worst 1.0배  (1.0 에 가까울수록 공정)
+
+── phase 1  [move]  ────────────────────────────────────────────────────── 경계 t=[360, 369, 374, 369, 331, 332, 363, 316, 330, 354, 404, 334, 385, 251, 357, 334, 293, 314, 408, 364]
+  달성 조건 (AND — 하나라도 깨지면 subgoal 미달):
+    ★ object_goal_dist <= 0.0464         v=0.0001  persist=0.91  scale=0.039412
+      |eef_object_dist − 0.009855| <= 0.008994 v=0.0021  persist=0.61  scale=0.024375
+    ★ = persistent (1/2) → phase_of · satisfies 판정에 사용
+    satisfies(1) ≡ object_goal_dist <= 0.0464
+  ρ 정규화: d_start=6.7393 (RMS·전역)   d_start_cond=[9.454, 0.945] (조건별)
+  민감도 (달성 상태 ρ=1.000 / ρ_worst=1.000). 각 조건을 'phase 시작과 같은 수준'으로
+           위반시킨다 — 조건들 사이에 동등하게 심각한 사건이다:
+    object_goal_dist   Δρ=-1.000   Δρ_worst=-0.841   satisfies→False
+    eef_object_dist    Δρ=-0.138   Δρ_worst=-0.841   satisfies→False
+    → 동등 심각도 조건 2개의 편차:  ρ 7.2배  vs  ρ_worst 1.0배  (1.0 에 가까울수록 공정)
+
+── phase 2  [post]  ────────────────────────────────────────────────────── 경계 t=[400, 403, 414, 398, 367, 368, 400, 355, 366, 393, 464, 387, 419, 311, 413, 363, 335, 367, 432, 390]
+  달성 조건 (AND — 하나라도 깨지면 subgoal 미달):
+    ★ contact == 0                       v=0.0000  persist=1.00  scale=0.5
+    ★ gripper_open <= 0.9894             v=0.0000  persist=1.00  scale=0.1524
+    ★ |object_goal_dist − 0.04339| <= 0.002189 v=0.0000  persist=0.95  scale=0.039412
+    ★ eef_object_dist >= 0.1398          v=0.0017  persist=1.00  scale=0.024375
+    ★ = persistent (4/4) → phase_of · satisfies 판정에 사용
+    satisfies(2) ≡ contact == 0  AND  gripper_open <= 0.9894  AND  |object_goal_dist − 0.04339| <= 0.002189  AND  eef_object_dist >= 0.1398
+  ρ 정규화: d_start=4.5137 (RMS·전역)   d_start_cond=[0.75, 6.198, 0.304, 5.33] (조건별)
+  민감도 (달성 상태 ρ=1.000 / ρ_worst=1.000). 각 조건을 'phase 시작과 같은 수준'으로
+           위반시킨다 — 조건들 사이에 동등하게 심각한 사건이다:
+    contact            Δρ=-0.222   Δρ_worst=-0.943   satisfies→False   [시작의 1.3배 — 이진 반전]
+    gripper_open       Δρ=-0.688   Δρ_worst=-0.707   satisfies→False
+    object_goal_dist   Δρ=-0.040   Δρ_worst=-0.707   satisfies→False
+    eef_object_dist    Δρ=-0.627   Δρ_worst=-0.707   satisfies→False
+    → 동등 심각도 조건 3개의 편차:  ρ 17.3배  vs  ρ_worst 1.0배  (1.0 에 가까울수록 공정)
+
+==============================================================================
+Δρ_worst 가 Stage 7 의 최적화 신호입니다 (rho.py 헤더 참조).
+|Δρ_worst| 가 작은 조건은 FCM screening 이 사실상 볼 수 없습니다.
+==============================================================================
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
