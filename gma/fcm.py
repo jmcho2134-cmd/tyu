@@ -175,8 +175,14 @@ class DemoRollout:
             np.array(eq), np.array(oq), self.goal, self.obj0_z,
             actions=np.array(acts), contact=np.array(con))
 
+    def _win_start(self, t):
+        """윈도우 시작 인덱스. pre(미분계열용 과거)와 warmup(리플레이 구간)의
+        더 이른 쪽을 쓴다 — branch 와 demo_window_features 가 같은 길이의
+        윈도우를 써야 residual 이 index 정렬된다."""
+        return max(0, t - max(self.pre, self.warmup))
+
     def _window_history(self, t):
-        lo = max(0, t - self.pre)
+        lo = self._win_start(t)
         f = self.fr
         return (lo, [list(f.eef_pos[lo:t + 1]), list(f.obj_pos[lo:t + 1]),
                      list(f.grip[lo:t + 1]), list(f.eef_quat[lo:t + 1]),
@@ -186,7 +192,7 @@ class DemoRollout:
     def demo_window_features(self, t, H):
         """데모 자신을 같은 윈도우 방식으로 계산한 φ_demo(t+h). branch 와
         수치적으로 동일한 파이프라인 → residual 에 계산 아티팩트가 없다."""
-        lo = max(0, t - self.pre)
+        lo = self._win_start(t)
         i0 = t - lo
         hi = min(self.T, t + H + 1)
         f = self.fr
@@ -199,8 +205,9 @@ class DemoRollout:
         return out
 
     def branch(self, t, delta, H):
-        """state t 에서 delta 를 H 스텝 유지 주입. -> (φ_branch(t+1..t+H),
-        info). delta=0 이 Branch A."""
+        """state t 에서 delta 를 H 스텝 유지 주입.
+        -> (φ_branch(t+1..t+H), info). delta=0 이 Branch A.
+        info["phi0"] = 분기 시작점의 **실측** feature 행 (아래 참조)."""
         lo, (eef, obj, grip, eq, oq, con, acts) = self._window_history(t)
         i0 = t - lo
         # 웜업 리플레이: t−W 에서 state 를 넣고 데모 액션으로 W 스텝 밀어
@@ -213,11 +220,29 @@ class DemoRollout:
         self.env.sim.forward()
         if self.grip_model is not None and self.ca_series is not None:
             self.grip_model.current_action = np.copy(self.ca_series[tw])
+
+        # 윈도우 [tw, t] 를 리플레이 **실측** 프레임으로 교체한다.
+        # 이전에는 이 구간이 데모 프레임이었다. 그러면 학습 입력 C = φ(t) 는
+        # "데모의 t 상태"인데 라벨 Y 는 "리플레이된 t 상태에서 일어난 일"이 되어
+        # 초기조건이 어긋난다. G6 가 재던 드리프트의 정체가 바로 이 불일치이고,
+        # 리플레이가 가장 안 맞는 채널(gripper_open·contact)에서 가장 커진다.
+        # 교체하면 C 와 Y 가 같은 초기조건을 가리키므로 δ 의 귀속이 정확해진다.
+        n_keep = max(0, tw - lo)               # [lo, tw) 는 관측 불가 → 데모 유지
+        eef, obj, grip = eef[:n_keep], obj[:n_keep], grip[:n_keep]
+        eq, oq, con = eq[:n_keep], oq[:n_keep], con[:n_keep]
+
+        def _push_frame(frm):
+            eef.append(frm["eef_pos"]); obj.append(frm["obj_pos"])
+            grip.append(frm["grip"]); eq.append(frm["eef_quat"])
+            oq.append(frm["obj_quat"]); con.append(frm["contact"])
+
+        _push_frame(self.ex._frame(with_dynamics=False))        # 프레임 tw
         for j in range(tw, t):
             try:
                 self.env.step(self.actions[j])
             except Exception:
                 return None, dict(clip=0.0, ok=False)
+            _push_frame(self.ex._frame(with_dynamics=False))    # tw+1 .. t
         clip_amt, ok = 0.0, True
         for h in range(H):
             a_base = self.actions[min(t + h, len(self.actions) - 1)]
@@ -242,7 +267,7 @@ class DemoRollout:
         out = np.zeros((H, fs.N_FEATURES))
         for h in range(1, H + 1):
             out[h - 1] = F[min(i0 + h, n - 1)]
-        return out, dict(clip=clip_amt, ok=True)
+        return out, dict(clip=clip_amt, ok=True, phi0=F[i0].copy())
 
 
 def graded_levels(base, n_levels=4, lo=0.25, hi=4.0):
@@ -315,8 +340,9 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
     """
     rows = dict(C=[], O=[], A=[], D=[], lam=[], Z=[], rho=[], h=[], Y=[],
                 clip=[], ep=[], t=[], G=[])
-    n_drop, n_anchor, n_anchor_drop = 0, 0, 0
+    n_drop, n_anchor, n_anchor_drop, n_drop_rho = 0, 0, 0, 0
     tol = getattr(args, "anchor_drift_tol", 0.3)
+    anchor_rho_tol = getattr(args, "anchor_rho_tol", None)
     for did, roller in rollers.items():
         T = roller.T
         zseg = z_from_bounds(boundaries[did]["bounds"], T)
@@ -337,6 +363,20 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
                     n_anchor_drop += 1
                     continue
                 drift = outA - base
+                # ρ 공간 anchor 필터. 위치 채널 기준(아래)만으로는 접촉·그리퍼
+                # 리플레이 오차가 걸러지지 않는데, ρ_worst 는 contact 를
+                # 조건 스케일 0.5 / d_start_cond 1.0 으로 읽으므로 1 프레임
+                # 뒤집힘이 곧 전체 스케일 이동이다. Stage 7 이 최적화하는 양이
+                # 오염된 anchor 는 여기서 버리는 것이 맞다.
+                phi_rep = infoA.get("phi0")
+                if anchor_rho_tol is not None and phi_rep is not None:
+                    zc0 = sg.phase_of(phi_rep)
+                    d_rho = abs(sg.rho_worst(zc0, phi_rep + drift[-1])
+                                - sg.rho_worst(zc0, phi_rep))
+                    if d_rho > anchor_rho_tol:
+                        n_anchor_drop += 1
+                        n_drop_rho += 1
+                        continue
                 if scales is not None:
                     # anchor 필터는 위치 기반 progress 채널만 본다.
                     # 이벤트 채널(contact/gripper)은 1 프레임 지터로 RMS 가
@@ -352,7 +392,12 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
                     if float(np.nanmax(ratio)) > tol:
                         n_anchor_drop += 1
                         continue
-                phi = roller.phi_at(t)
+                # 학습 입력 φ 는 데모 프레임이 아니라 **분기가 실제로 출발한**
+                # 리플레이 상태다 (branch 의 phi0). 데모 φ 를 쓰면 C 와 Y 의
+                # 초기조건이 어긋난다 — branch() 주석 참조.
+                phi = infoA.get("phi0")
+                if phi is None:
+                    phi = roller.phi_at(t)
                 zc = sg.phase_of(phi)
                 rc = sg.rho(zc, phi)
 
@@ -394,7 +439,8 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
     data["anchor_drop_rate"] = np.array(
         n_anchor_drop / max(1, n_anchor))
     log(f"[collect] {len(data['Y'])} rows ({n_drop} branches dropped; "
-        f"anchors kept {n_anchor - n_anchor_drop}/{n_anchor})")
+        f"anchors kept {n_anchor - n_anchor_drop}/{n_anchor}"
+        + (f", ρ 필터로 {n_drop_rho}개" if n_drop_rho else "") + ")")
     return data
 
 
@@ -414,24 +460,59 @@ def subgoal_channels(sg):
     return m
 
 
-def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None):
-    """G6: 분기·리플레이가 믿을 만한가. 두 조건의 AND:
+def rho_drift_effect(data, sg, per_axis=None):
+    """phase 별 (drift_ρ, effect_ρ, n0, n1) — ρ_worst 공간에서 재는 리플레이 오차.
 
-    (1) 유지된 anchor 에서 리플레이 드리프트(λ=0 행의 Y)가 perturbation
-        효과(λ>0 행의 Y) 대비 작다: max_j drift_j/effect_j ≤ tol_ratio.
-        판정은 효과가 실재하는 feature(effect > 1%·데모스케일)에서만 —
-        perturbation 이 원래 못 건드리는 채널은 노이즈/노이즈 = 1 이 되어
-        의미가 없다 (mock 에서 실측).
-    (2) anchor 드롭률 ≤ max_anchor_drop. 접촉 순간 몇 개를 거르는 것은
-        정상이지만 절반 이상 버려진다면 분기 자체가 깨진 것이다.
+    per_axis: (adim,) bool 또는 None. 주면 λ>0 행 중 δ 가 그 축들에 유의미한
+    성분을 가진 행만으로 effect 를 잰다 (분모 희석 방지).
+    """
+    m0 = data["lam"] == 0.0
+    C, Y, Z = data["C"], data["Y"], data["Z"].astype(int)
+    out = {}
+    for k in range(sg.K):
+        s0, s1 = m0 & (Z == k), (~m0) & (Z == k)
+        if s0.sum() == 0 or s1.sum() == 0:
+            continue
 
-    판정 범위 (sg 를 넘기면): subgoal 조건에 쓰인 feature 전부.
-    이전에는 kind == PROGRESS 로 한정했는데, kind 는 "phase 경계를 만들 자격"을
-    정하는 축이지 게이트 범위가 아니다. 그 결과 contact(실측 0.386)와
-    gripper_open(0.635)이 판정에서 빠졌고, 이 둘은 정확히 phase 0·2 의 subgoal
-    조건 feature 다 — satisfies(0) 은 contact 하나로 결정된다. 게이트가 통과를
-    선언하는 동안 라벨을 정의하는 채널이 검사되지 않고 있었다.
-    sg 가 없으면 (mock 등) PROGRESS 로 폴백한다.
+        def rms(sel):
+            base = np.array([sg.rho_worst(k, c) for c in C[sel]])
+            moved = np.array([sg.rho_worst(k, c + y)
+                              for c, y in zip(C[sel], Y[sel])])
+            return float(np.sqrt(((moved - base) ** 2).mean()))
+        out[k] = (rms(s0), rms(s1), int(s0.sum()), int(s1.sum()))
+    return out
+
+
+def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None,
+            rho_tol=0.3):
+    """G6: 분기·리플레이가 믿을 만한가.
+
+    판정 기준은 **ρ_worst 공간의 phase 별 비율**이다 (sg 를 주면):
+
+        drift_ρ(k) = RMS | ρ_worst(φ + Y_λ=0) − ρ_worst(φ) |      리플레이 오차
+        effect_ρ(k) = RMS | ρ_worst(φ + Y_λ>0) − ρ_worst(φ) |     섭동 효과
+        모든 phase 에서 drift_ρ / effect_ρ ≤ rho_tol
+
+    왜 raw feature 단위 비율이 아닌가 (실측으로 확인된 두 가지 결함):
+
+      (1) 분모 희석. effect 를 λ>0 행 전체로 평균하면 그 채널을 아예 건드리지
+          않는 방향까지 들어간다. 실측: gripper_open 의 |Y| 는 δ 에 grip 성분이
+          있는 행에서 0.114, 없는 행에서 0.024 (4.7배). contact 은 0.063 vs
+          0.0017 (36배). 그래서 per-feature 비율이 0.63 / 0.51 로 부풀었다.
+      (2) 채널별 중요도 미반영. ρ_worst 는 조건별 스케일(eq=0.5)과
+          d_start_cond 로 정규화하므로, raw 단위 드리프트가 같아도 ρ 에 미치는
+          영향은 채널마다 다르다. 게이트가 지켜야 하는 것은 "Stage 7 이
+          최적화하는 양이 리플레이 오차에 오염되지 않는가"이고 그것이 ρ 다.
+
+    실측(5편)에서 이 기준은 실패를 phase 0 하나로 국소화했다:
+        phase0 0.931 (FAIL)  /  phase1 0.001  /  phase2 0.085
+    per-feature 기준은 같은 데이터에서 전체를 FAIL 로 만들어, 어느 phase 의
+    데이터가 못 쓸 것인지 알려주지 못했다.
+
+    raw per-feature 비율은 진단으로 계속 출력한다. sg 가 없으면 (mock 등)
+    예전 per-feature PROGRESS 판정으로 폴백한다.
+
+    두 번째 조건은 그대로: anchor 드롭률 ≤ max_anchor_drop.
     """
     m0 = data["lam"] == 0.0
     if not m0.any():
@@ -442,36 +523,53 @@ def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None):
     effect = np.sqrt((data["Y"][~m0] ** 2).mean(axis=0))
     active = effect > (1e-9 + 0.01 * scale)
     ratio = np.where(active, drift / np.maximum(effect, 1e-12), np.nan)
+    drop = float(data.get("anchor_drop_rate", 0.0))
+    drop_ok = drop <= max_anchor_drop
 
     gated = subgoal_channels(sg)
-    if gated.any():
-        scope = "subgoal 조건 채널"
-    else:
+    if not gated.any():
+        # 폴백: 구 per-feature PROGRESS 판정
         gated = np.array([fs.SPEC[n].kind == fs.PROGRESS for n in fs.NAMES])
-        scope = "progress 채널 (subgoal 미제공 폴백)"
-    r_gate = np.where(gated, ratio, np.nan)
-    if not np.isfinite(r_gate).any():
-        log(f"[G6] FAIL: 판정 대상({scope})에 유효한 비율이 없음")
+        r_gate = np.where(gated, ratio, np.nan)
+        if not np.isfinite(r_gate).any():
+            log("[G6] FAIL: 판정 대상에 유효한 비율이 없음")
+            return False, ratio
+        worst = float(np.nanmax(r_gate))
+        j = int(np.nanargmax(r_gate))
+        ok = (worst <= tol_ratio) and drop_ok
+        log(f"[G6] {'PASS' if ok else 'FAIL'}: λ=0 drift/effect (progress 채널 "
+            f"(subgoal 미제공 폴백)) 최대 {worst:.3f} ({fs.NAMES[j]}) "
+            f"{'<=' if worst <= tol_ratio else '>'} {tol_ratio}, "
+            f"anchor drop {drop:.0%} "
+            f"{'<=' if drop_ok else '>'} {max_anchor_drop:.0%}")
+        log("     판정 대상: " + ", ".join(
+            f"{fs.NAMES[k]}={ratio[k]:.3f}" for k in range(fs.N_FEATURES)
+            if gated[k] and np.isfinite(ratio[k])))
+        return ok, ratio
+
+    # ---- 본 판정: ρ_worst 공간, phase 별 -----------------------------------
+    per = rho_drift_effect(data, sg)
+    if not per:
+        log("[G6] FAIL: phase 별 ρ 비율을 잴 수 있는 행이 없음")
         return False, ratio
-    worst = float(np.nanmax(r_gate))
-    j = int(np.nanargmax(r_gate))
-    drop = float(data.get("anchor_drop_rate", 0.0))
-    ok = (worst <= tol_ratio) and (drop <= max_anchor_drop)
-    log(f"[G6] {'PASS' if ok else 'FAIL'}: λ=0 drift/effect ({scope}) "
-        f"최대 {worst:.3f} ({fs.NAMES[j]}) "
-        f"{'<=' if worst <= tol_ratio else '>'} {tol_ratio}, "
-        f"anchor drop {drop:.0%} "
-        f"{'<=' if drop <= max_anchor_drop else '>'} {max_anchor_drop:.0%}")
-    inside = ", ".join(f"{fs.NAMES[k]}={ratio[k]:.3f}"
-                       for k in range(fs.N_FEATURES)
-                       if gated[k] and np.isfinite(ratio[k]))
-    log(f"     판정 대상: {inside}")
-    info = ", ".join(f"{fs.NAMES[k]}={ratio[k]:.2f}"
-                     for k in range(fs.N_FEATURES)
-                     if not gated[k] and np.isfinite(ratio[k])
-                     and ratio[k] > tol_ratio)
-    if info:
-        log(f"     (정보: 비판정 채널 중 비율 초과 — {info})")
+    rr = {k: (d / max(e, 1e-12)) for k, (d, e, _, _) in per.items()}
+    worst_k = max(rr, key=lambda k: rr[k])
+    ok = all(v <= rho_tol for v in rr.values()) and drop_ok
+    log(f"[G6] {'PASS' if ok else 'FAIL'}: ρ_worst 공간 drift/effect "
+        f"최대 {rr[worst_k]:.3f} (phase {worst_k} [{sg.labels[worst_k]}]) "
+        f"{'<=' if rr[worst_k] <= rho_tol else '>'} {rho_tol}, "
+        f"anchor drop {drop:.0%} {'<=' if drop_ok else '>'} "
+        f"{max_anchor_drop:.0%}")
+    for k in sorted(per):
+        d, e, n0, n1 = per[k]
+        mark = "  <-- 이 phase 데이터는 못 쓴다" if rr[k] > rho_tol else ""
+        log(f"     phase {k} [{sg.labels[k]:<5}] drift_ρ={d:.4f} "
+            f"effect_ρ={e:.4f} ratio={rr[k]:.3f} "
+            f"(λ=0 {n0}행 / λ>0 {n1}행){mark}")
+    log("     [진단] raw feature 비율 (분모가 δ 무관 방향까지 포함해 희석됨): "
+        + ", ".join(f"{fs.NAMES[k]}={ratio[k]:.3f}"
+                    for k in range(fs.N_FEATURES)
+                    if gated[k] and np.isfinite(ratio[k])))
     return ok, ratio
 
 
@@ -895,7 +993,8 @@ def cmd_collect(args):
     finally:
         if env is not None:
             env.close()
-    ok, ratio = gate_g6(data, tol_ratio=args.g6_tol, sg=sg)
+    ok, ratio = gate_g6(data, tol_ratio=args.g6_tol, sg=sg,
+                        rho_tol=args.g6_rho_tol)
     os.makedirs(args.out_dir, exist_ok=True)
     save_dataset(os.path.join(args.out_dir, "fcm_dataset.hdf5"), data)
     viz_g6(data, ratio, os.path.join(args.out_dir, "fcm_g6_residual.png"))
@@ -912,7 +1011,8 @@ def cmd_train(args, data=None):
         sg = Subgoal.load(args.subgoal)
     except Exception:
         sg = None
-    ok, _ = gate_g6(data, tol_ratio=args.g6_tol, sg=sg)
+    ok, _ = gate_g6(data, tol_ratio=args.g6_tol, sg=sg,
+                    rho_tol=args.g6_rho_tol)
     if not ok and not args.no_gate:
         raise SystemExit("[G6] FAIL — 학습 중단")
     # holdout: 시간 순 20% (무작위 셔플은 같은 rollout 의 h 행이 양쪽에 새는
@@ -1237,7 +1337,9 @@ class _MockRoller:
         for h in range(H):
             out[h] += (h + 1) * self.dt * (self.M @ delta)
             out[h] += self.rng.normal(0, 1e-4, fs.N_FEATURES)
-        return out, dict(clip=0.0, ok=True)
+        # 실제 DemoRollout 과 같은 계약: 분기 시작점의 실측 feature 행.
+        # mock 은 리플레이 오차가 없으므로 데모 φ(t) 와 같다.
+        return out, dict(clip=0.0, ok=True, phi0=self.F0[t].copy())
 
 
 def _mock_subgoal():
@@ -1277,6 +1379,7 @@ def run_selftest():
         anchors, horizon, levels = 3, 6, 3
         delta_scale, dirs_per_level, max_clip = 0.3, 4, 0.6
         anchor_drift_tol = 0.3
+        anchor_rho_tol = 0.15
         min_score = 0.0
     data = collect(rollers, boundaries, sg, A, rng,
                    scales=roller.F0.std(axis=0), log=lambda *a: None)
@@ -1294,8 +1397,26 @@ def run_selftest():
     if got != want:
         ok = False; print(f"[FAIL] G6 판정 범위 {got} != {want}")
     else:
-        print(f"G6 판정 범위 = subgoal 조건 채널 {sorted(got)} "
+        print(f"G6 진단 범위 = subgoal 조건 채널 {sorted(got)} "
               f"(kind 기반 PROGRESS 한정이 아님)")
+
+    # ρ 공간 판정이 데이터에 존재하는 phase 전부를 덮는가 (본판정 경로).
+    # mock 의 F0 는 전 구간에서 subgoal 조건 미달이라 phase_of 가 0 만 낸다 —
+    # zseg(경계 기반)와 Z(조건 기반)가 다른 것은 의도된 성질이므로, 기준은
+    # "Z 에 실제로 있는 phase 를 빠짐없이 판정하는가"다.
+    per = rho_drift_effect(data, sg)
+    zs = set(np.unique(data["Z"]).astype(int).tolist())
+    if set(per) != zs:
+        ok = False
+        print(f"[FAIL] ρ 공간 판정 phase {sorted(per)} != 데이터의 {sorted(zs)}")
+    else:
+        rr = {k: per[k][0] / max(per[k][1], 1e-12) for k in per}
+        print(f"ρ 공간 판정 phase {sorted(per)} (Z 전부 커버), ratio = "
+              + ", ".join(f"p{k}:{v:.3f}" for k, v in sorted(rr.items())))
+        # mock 은 리플레이 오차가 없으므로 drift_ρ ≈ 0 이어야 한다
+        if max(rr.values()) > 0.3:
+            ok = False
+            print(f"[FAIL] mock 인데 ρ drift 가 큼: {rr}")
     if "G" not in data:
         ok = False; print("[FAIL] collect 가 goal 열(G)을 담지 않음")
     elif data["G"].shape != (len(data["Y"]), 3):
@@ -1382,13 +1503,23 @@ def add_args(ap):
     ap.add_argument("--delta-scale", type=float, default=0.3)
     ap.add_argument("--dirs-per-level", type=int, default=5)
     ap.add_argument("--max-clip", type=float, default=0.6)
-    ap.add_argument("--warmup", type=int, default=3,
+    # warmup 기본 6 (구 3): 리플레이 오차의 주원인이 set_state 로 복원되지 않는
+    # controller / gripper 적분기 내부상태이고, 웜업 스텝이 그것을 데모와
+    # 수렴시킨다. 3 스텝에서는 gripper_open 드리프트가 채널 폭의 6.5%(RMS
+    # 0.085) 남아 phase 0 의 ρ 비율이 0.93 이었다.
+    ap.add_argument("--warmup", type=int, default=6,
                     help="분기 전 데모 액션 리플레이 스텝 수 (state 밖 내부상태 정렬)")
     ap.add_argument("--anchor-drift-tol", type=float, default=0.3,
                     help="Branch A 드리프트가 이 비율(데모 스케일 대비)을 "
-                         "넘는 anchor 는 버림")
+                         "넘는 anchor 는 버림 (위치 progress 채널 기준)")
+    ap.add_argument("--anchor-rho-tol", type=float, default=0.15,
+                    help="Branch A 리플레이가 ρ_worst 를 이만큼 넘게 흔드는 "
+                         "anchor 는 버림. contact 1프레임 뒤집힘이 ρ 전체 "
+                         "스케일 이동이라 위치 기준 필터로는 안 걸러진다")
     ap.add_argument("--g6-tol", type=float, default=0.3,
-                    help="λ=0 drift / λ>0 effect 허용 비율")
+                    help="[진단] raw feature 단위 drift/effect 허용 비율")
+    ap.add_argument("--g6-rho-tol", type=float, default=0.3,
+                    help="G6 본판정: phase 별 ρ_worst 공간 drift/effect 허용 비율")
     ap.add_argument("--no-gate", action="store_true")
     # train
     ap.add_argument("--ensemble", type=int, default=5)
