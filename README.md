@@ -111,6 +111,15 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma>
 
 
 
-
+[collect] 33840 rows (600 branches dropped; anchors kept 230/240, ρ 필터로 1개)
+[G6] FAIL: ρ_worst 공간 drift/effect 최대 0.686 (phase 0 [pre]) > 0.3, anchor drop 4% <= 50%
+     phase 0 [pre  ] drift_ρ=0.0870 effect_ρ=0.1268 ratio=0.686 (λ=0 752행 / λ>0 12968행)  <-- 이 phase 데이터는 못 쓴다
+     phase 1 [move ] drift_ρ=0.0008 effect_ρ=1.0844 ratio=0.001 (λ=0 520행 / λ>0 9064행)
+     phase 2 [post ] drift_ρ=0.0023 effect_ρ=0.3212 ratio=0.007 (λ=0 568행 / λ>0 9968행)
+     [진단] raw feature 비율 (분모가 δ 무관 방향까지 포함해 희석됨): eef_object_dist=0.074, object_goal_dist=0.026, gripper_open=0.523, contact=0.200
+[plot] ./artifacts\fcm_g6_residual.png
+[out] ./artifacts\fcm_dataset.hdf5
+[G6] FAIL — 분기/리플레이 수정 전 학습 금지
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
 
 
