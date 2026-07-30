@@ -418,13 +418,24 @@ def run(args):
 
     n_cliff = sum(1 for f in fams if f["lambda_kind"] == "cliff")
     print(f"[stat] cliff {n_cliff} / no-cliff {len(fams) - n_cliff}")
-    # 효율 rung 이 전부 성공했는가 = λ_ok 정의가 의도대로 동작하는가
+    # 효율 rung 이 전부 성공했는가 = λ_ok 정의가 의도대로 동작하는가.
+    # 소수(<2%)의 실패는 파지 물리의 비단조성(성공(λ)이 단조라는 보장이 없다 —
+    # find_lambda_max 주석) 때문에 정상적으로 발생하고, 해당 family 는 G8 의
+    # R2/R3 가 기각한다. 실측: 48 families × 5 rung 에서 1/240 (0.4%).
     eff_fail = sum(1 for f in fams
                    for t, kd in zip(f["trajectories"], f["rung_kind"])
                    if kd == "eff" and not t["success"])
     n_eff = sum(1 for f in fams for kd in f["rung_kind"] if kd == "eff")
-    print(f"[stat] 효율 rung 실패 {eff_fail}/{n_eff} "
-          f"({'OK — 순수 효율 사다리' if eff_fail == 0 else 'λ_ok 근방 성공이 불안정'})")
+    rate = eff_fail / max(1, n_eff)
+    if eff_fail == 0:
+        tag = "OK — 순수 효율 사다리"
+    elif rate < 0.02:
+        tag = ("정상 범위 — 비단조 파지 물리; 해당 family 는 G8 R2/R3 가 "
+               "기각한다")
+    else:
+        tag = ("λ_ok 근방 성공이 불안정 — n_bisect 상향 또는 λ 탐색 재검토 "
+               "필요")
+    print(f"[stat] 효율 rung 실패 {eff_fail}/{n_eff} ({rate:.1%}) — {tag}")
     if args.plot:
         viz_ladder(fams, sg, os.path.join(args.out_dir,
                                           "degradation_ladder.png"))
