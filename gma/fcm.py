@@ -1586,8 +1586,34 @@ def add_args(ap):
     ap.add_argument("--no-gate", action="store_true")
     # train
     ap.add_argument("--ensemble", type=int, default=5)
-    ap.add_argument("--hidden", type=int, nargs="+", default=[96, 96])
-    ap.add_argument("--max-iter", type=int, default=1200)
+    # (96,96) → (256,256): 왜 기본값을 올렸는가. 두 데이터셋에서 결론이 갈리므로
+    # 둘 다 기록한다.
+    #
+    #   5편 (멤버 1개, rollout 단위 heldout R²)
+    #     eef_object_dist  +0.535 → +0.686   object_goal_dist +0.510 → +0.727
+    #     grasp_align      +0.530 → +0.627   contact/gripper 는 거의 불변
+    #   20편 (멤버 5개)
+    #     eef_object_dist  +0.365 → +0.383   object_goal_dist +0.300 → +0.323
+    #     contact          +0.333 → +0.346   → R² 이득은 +0.02 로 미미
+    #
+    # 즉 "용량이 병목"이라는 5편 결론은 20편에서 성립하지 않는다. 20편은 객체·
+    # bin 기하가 훨씬 넓게 흩어져 있어 residual 자체가 어려운 함수이고, 그것이
+    # R² 상한을 정한다 — 용량으로는 못 넘는다.
+    #
+    # 그래도 기본값을 올린 이유는 R² 가 아니라 **앙상블 분산**이다. Stage 7 의
+    # 점수는 score = −Δρ̂ − β·unc 이고 통과 여부는 unc 가 결정한다. 20편 실측:
+    #     phase 1 axis[grip−]  unc 0.468 → 0.294,  score 0.651 → 0.996
+    #     통과 후보           phase 1: 2/4 → 4/4  (steepest 포함),  phase 2: 4/4
+    # R² 는 안 움직였는데 열화 방향 집합이 채워졌다. 이것이 파이프라인이 실제로
+    # 쓰는 양이다.
+    #
+    # 비용: 멤버당 465s → 660s. 급하면 --hidden 을 낮추지 말고 --ensemble 3 으로
+    # 줄여라 (분산 추정이 나빠지지만 방향 랭킹은 유지된다).
+    # 주의: MLPRegressor.best_validation_score_ 는 15개 출력의 평균 R² 라 쉬운
+    # 채널(eef_ang_speed 0.98, action_magnitude 0.90)이 지배한다. 판단은 반드시
+    # per-feature heldout R² 로 하라.
+    ap.add_argument("--hidden", type=int, nargs="+", default=[256, 256])
+    ap.add_argument("--max-iter", type=int, default=2000)
     # screen
     # λ_probe 기본값 1.0: 학습 delta 크기는 graded_levels(0.3, 4) =
     # [0.075, 0.189, 0.476, 1.2] 이므로 1.0 은 분포 상단(외삽 아님)이다.
