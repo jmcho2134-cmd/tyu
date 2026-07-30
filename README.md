@@ -123,3 +123,21 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma>
 PS C:\Users\Administrator\Desktop\tyu-main\gma> 
 
 
+
+ollect] 33288 rows (606 branches dropped; anchors kept 227/240, ρ 필터로 2개)
+[G6] PASS: ρ_worst 공간 drift/effect 최대 0.075 (phase 0 [pre]) <= 0.3, anchor drop 5% <= 50%
+     phase 0 [pre  ] drift_ρ=0.0072 effect_ρ=0.0955 ratio=0.075 (λ=0 736행 / λ>0 12752행)
+           drift 분포: 중앙 0.00000  95% 0.0005  최대 0.0535
+           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00718 ratio=0.075
+     phase 1 [move ] drift_ρ=0.0025 effect_ρ=1.0484 ratio=0.002 (λ=0 504행 / λ>0 8648행)
+           drift 분포: 중앙 0.00026  95% 0.0015  최대 0.0235
+           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00255 ratio=0.002
+     phase 2 [post ] drift_ρ=0.0023 effect_ρ=0.7415 ratio=0.003 (λ=0 576행 / λ>0 10072행)
+           drift 분포: 중앙 0.00078  95% 0.0041  최대 0.0110
+           > 0.15 인 행 0개 (0.00%) 제외 시 drift_ρ=0.00231 ratio=0.003
+     [진단] raw feature 비율 (분모가 δ 무관 방향까지 포함해 희석됨): eef_object_dist=0.080, object_goal_dist=0.035, gripper_open=0.489, contact=0.000
+[plot] ./artifacts\fcm_g6_residual.png
+[out] ./artifacts\fcm_dataset.hdf5
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+
