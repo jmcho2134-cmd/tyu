@@ -152,12 +152,22 @@ def rho_endpoint(sg, phase, traj, zseg):
 # ===========================================================================
 def find_lambda_max(runner, seq, *, lam0=0.5, lam_cap=4.0, n_bisect=3,
                     log=print):
-    """task 실패의 경계를 찾는다.
+    """task 실패의 경계를 찾는다. -> (lam_ok, lam_fail | None, kind, probes)
+
+    lam_ok   성공이 확인된 가장 큰 λ   ← 효율 사다리의 상단
+    lam_fail 실패가 확인된 가장 작은 λ ← 별도의 cliff rung (없으면 None)
 
     성공(λ) 이 단조라는 보장은 없다(파지 물리의 cliff) — bracketing 은 처음
     만나는 실패를, bisection 은 그 근방 경계를 잡을 뿐이고, 최종 판정은
-    Stage 9 의 G8 (단조성·계단성) 이 한다. λ_cap 까지 실패가 없으면
-    (λ_cap, 'no-cliff') 를 반환한다 — 순수 효율 family.
+    Stage 9 의 G8 이 한다. λ_cap 까지 실패가 없으면 kind='no-cliff'.
+
+    왜 두 값을 나눠 반환하는가 (이전에는 lam_fail 하나만 λ_max 로 썼다):
+    levels = [0, .25, .5, .75, 1.0] × lam_fail 로 사다리를 만들면 최상단 rung 이
+    정의상 실패다. 실측 결과 cliff family 20/20 이 그랬고, damage 라벨에 실패
+    가중치 2.0 이 얹혀 pair 의 54% 가 '성공 vs 실패' 이진 대비가 됐다. 그러면
+    R_θ 는 효율이 아니라 성공 판별기를 학습한다 — D-REX/T-REX 골격이 피하려는
+    실패 모드다. lam_ok 로 사다리를 만들면 5 rung 전부 성공(순수 효율 랭킹)이고,
+    cliff 는 별도 rung 으로 표시해 pair 를 분리 학습할 수 있다.
     """
     lam_ok, lam = 0.0, float(lam0)
     lam_fail = None
@@ -172,7 +182,7 @@ def find_lambda_max(runner, seq, *, lam0=0.5, lam_cap=4.0, n_bisect=3,
             lam_fail = lam
             break
     if lam_fail is None:
-        return float(lam_cap), "no-cliff", probes
+        return float(lam_cap), None, "no-cliff", probes
     for _ in range(n_bisect):
         mid = 0.5 * (lam_ok + lam_fail)
         traj, _ = runner.run(seq, mid)
@@ -181,13 +191,16 @@ def find_lambda_max(runner, seq, *, lam0=0.5, lam_cap=4.0, n_bisect=3,
             lam_ok = mid
         else:
             lam_fail = mid
-    return float(lam_fail), "cliff", probes
+    # lam0 자체가 실패면 lam_ok 가 0 근처에 머문다 — 효율 사다리를 만들 여지가
+    # 없다는 신호이므로 그대로 반환하고 G8 의 R4(spread) 가 걸러낸다.
+    return float(lam_ok), float(lam_fail), "cliff", probes
 
 
 # ===========================================================================
 # SECTION 3 — 전체 조립
 # ===========================================================================
-LEVELS = [0.0, 0.25, 0.50, 0.75, 1.0]
+LEVELS = [0.0, 0.25, 0.50, 0.75, 1.0]      # × λ_ok — 순수 효율 사다리
+CLIFF_LEVEL = 1.25                          # cliff rung 의 x 축 표식 (λ_fail)
 ACTION_NAMES = ["dx", "dy", "dz", "drx", "dry", "drz", "grip"]
 
 
@@ -211,7 +224,36 @@ def phase_component_set(cands, top_k, w_thresh=0.25):
 
 
 def family_specs(r, phase, cands, args):
-    """(candidate-dict, inject_seq) 목록 — inject_mode 별 family 정의."""
+    """(candidate-dict, inject_seq) 목록 — inject_mode 별 family 정의.
+
+    "top1" (기본): 후보를 합산하지 않고 각 후보를 독립 family 로 만든다.
+    "set" 의 성분 합산은 Stage 7 의 랭킹을 지운다 — 실측 cos(Top-1, 합산 w):
+    phase0 0.686 / phase1 0.331 / phase2 0.636. phase 1 은 지배 성분이 dz 에서
+    drx 로 바뀌었다. 게다가 합산은 점수가 낮은(또는 음수였던) 후보까지 방향에
+    섞으므로 "phase-conditioned FCM 방향" 이라는 주장의 근거가 사라지고,
+    Ablation A(등방 Gaussian vs FCM 방향)도 두 조건이 구별되지 않는다 —
+    후보 절반이 rand* 였으므로 합산 결과는 이미 절반이 등방 Gaussian 이다.
+    """
+    if r.inject_mode == "top1":
+        specs = []
+        for c in cands[:args.top_k]:
+            for si in range(args.n_seeds):
+                w = np.asarray(c["direction"], float)
+                w = w / max(1e-9, np.abs(w).max())     # max|·|=1 로만 정규화
+                cand = dict(c, candidate_id=f"{c['candidate_id']}_s{si}",
+                            components=[
+                                f"{ACTION_NAMES[j]}{'+' if w[j] > 0 else '-'}"
+                                f"{abs(w[j]):.2f}" for j in np.nonzero(w)[0]],
+                            weights=[float(x) for x in w],
+                            sources=[c["candidate_id"]],
+                            seed=args.seed + si)
+                # 스텝 단위 Bernoulli (seq_random) 를 쓴다. seq_set 의 성분별
+                # Bernoulli 는 스텝마다 성분 부분집합을 뽑으므로 그 스텝의 실주입
+                # 방향이 후보 방향이 아니게 된다 — top1 의 목적(FCM 이 고른 방향을
+                # 그대로 실행)과 정면으로 어긋난다. 스텝 단위면 주입되는 스텝에서
+                # 방향이 정확히 보존되고, 간헐성(SSRR 성질)은 유지된다.
+                specs.append((cand, r.seq_random(phase, w, args.seed + si)))
+        return specs
     if r.inject_mode == "set":
         w, comps = phase_component_set(cands, args.top_k, args.w_thresh)
         specs = []
@@ -256,23 +298,37 @@ def build_families(runners, action_sets, sg, args, log=print):
                 if not seq.any():
                     continue
                 fid = f"{did}:{cand['candidate_id']}"
-                lam_max, kind, probes = find_lambda_max(
+                lam_ok, lam_fail, kind, probes = find_lambda_max(
                     r, seq, lam0=args.lam0, lam_cap=args.lam_cap,
                     n_bisect=args.n_bisect)
+                # 효율 사다리: λ_ok 기준 5 rung (전부 성공이 기대값)
                 trajs = [zero_runs[did]]
+                fracs = list(LEVELS)
+                lams = [lv * lam_ok for lv in LEVELS]
+                kinds = ["eff"] * len(LEVELS)
                 for lv in LEVELS[1:]:
-                    traj, _ = r.run(seq, lv * lam_max)
+                    traj, _ = r.run(seq, lv * lam_ok)
                     trajs.append(traj)
+                # cliff rung: 실패가 확인된 λ 를 하나만 따로 붙인다. 라벨에서
+                # '효율 pair' 와 '실패 pair' 를 분리할 수 있게 표시해 둔다.
+                if lam_fail is not None and args.with_cliff:
+                    traj, _ = r.run(seq, lam_fail)
+                    trajs.append(traj)
+                    fracs.append(CLIFF_LEVEL)
+                    lams.append(float(lam_fail))
+                    kinds.append("cliff")
                 rhos = [rho_endpoint(sg, phase, t, r.zseg) for t in trajs]
                 succ = [bool(t["success"]) for t in trajs]
-                log(f"  {fid:<22} λ_max={lam_max:.2f} ({kind}, "
-                    f"{len(probes)} probes)  ρ_end="
+                log(f"  {fid:<22} λ_ok={lam_ok:.2f} "
+                    f"λ_fail={'—' if lam_fail is None else f'{lam_fail:.2f}'} "
+                    f"({kind}, {len(probes)} probes)  ρ_end="
                     f"[{', '.join(f'{x:+.2f}' for x in rhos)}]  "
                     f"success={''.join('o' if s else 'x' for s in succ)}")
                 families.append(dict(
                     family_id=fid, candidate=cand, demo_id=did, phase_id=phase,
-                    lambda_max=lam_max, lambda_kind=kind,
-                    lambda_levels=[lv * lam_max for lv in LEVELS],
+                    lambda_max=lam_ok, lambda_ok=lam_ok,
+                    lambda_fail=lam_fail, lambda_kind=kind,
+                    lambda_levels=lams, level_fracs=fracs, rung_kind=kinds,
                     probes=probes, trajectories=trajs, rho_endpoint=rhos))
     return families
 
@@ -347,17 +403,28 @@ def run(args):
         if env is not None:
             env.close()
 
-    meta = dict(n_families=len(fams), levels=LEVELS, lam_cap=args.lam_cap,
+    meta = dict(n_families=len(fams), levels=LEVELS,
+                cliff_level=CLIFF_LEVEL, with_cliff=bool(args.with_cliff),
+                lam_cap=args.lam_cap,
                 kp=args.kp, pos_scale=args.pos_scale, top_k=args.top_k,
                 inject_mode=args.inject_mode, p_inject=args.p_inject,
                 n_seeds=args.n_seeds, w_thresh=args.w_thresh,
                 demos=[e["demo_id"] for e in entries])
     out = os.path.join(args.out_dir, "degradation.npz")
     save_families(out, fams, meta)
-    print(f"\n[out] {out}  ({len(fams)} families × {len(LEVELS)} levels)")
+    n_rung = [len(f["trajectories"]) for f in fams]
+    print(f"\n[out] {out}  ({len(fams)} families, rung "
+          f"{min(n_rung)}~{max(n_rung)}개)")
 
     n_cliff = sum(1 for f in fams if f["lambda_kind"] == "cliff")
     print(f"[stat] cliff {n_cliff} / no-cliff {len(fams) - n_cliff}")
+    # 효율 rung 이 전부 성공했는가 = λ_ok 정의가 의도대로 동작하는가
+    eff_fail = sum(1 for f in fams
+                   for t, kd in zip(f["trajectories"], f["rung_kind"])
+                   if kd == "eff" and not t["success"])
+    n_eff = sum(1 for f in fams for kd in f["rung_kind"] if kd == "eff")
+    print(f"[stat] 효율 rung 실패 {eff_fail}/{n_eff} "
+          f"({'OK — 순수 효율 사다리' if eff_fail == 0 else 'λ_ok 근방 성공이 불안정'})")
     if args.plot:
         viz_ladder(fams, sg, os.path.join(args.out_dir,
                                           "degradation_ladder.png"))
@@ -389,15 +456,19 @@ def viz_ladder(fams, sg, out_png):
         for f in sub:
             ci = cands.index(f["candidate"]["candidate_id"])
             dr = np.asarray(f["rho_endpoint"]) - f["rho_endpoint"][0]
-            ax.plot(LEVELS, dr, color=cmap(ci % 10), alpha=0.55, lw=1.4)
-            for x, y, t in zip(LEVELS, dr, f["trajectories"]):
+            xs = f.get("level_fracs", LEVELS)
+            ax.plot(xs, dr, color=cmap(ci % 10), alpha=0.55, lw=1.4)
+            for x, y, t, kd in zip(xs, dr, f["trajectories"],
+                                   f.get("rung_kind", ["eff"] * len(xs))):
                 ax.scatter(x, y, marker="o" if t["success"] else "x",
-                           color=cmap(ci % 10), s=28,
-                           zorder=3)
+                           color=cmap(ci % 10), s=44 if kd == "cliff" else 28,
+                           edgecolors="k" if kd == "cliff" else "none",
+                           linewidths=0.6, zorder=3)
+        ax.axvline(1.0, color="0.7", lw=0.6, ls=":")
         for ci, cid in enumerate(cands):
             ax.plot([], [], color=cmap(ci % 10), label=cid)
         ax.axhline(0, color="0.5", lw=0.6)
-        ax.set_xlabel("level (× λ_max)")
+        ax.set_xlabel("level (× λ_ok;  1.25 = cliff rung @ λ_fail)")
         ax.set_ylabel("Δρ_end vs λ=0")
         ax.set_title(f"phase {ph} [{sg.labels[ph]}]  (o=success, x=fail)")
         ax.legend(fontsize=7)
@@ -422,13 +493,14 @@ def viz_traj3d(fams, out_png, max_panels=3):
     cmap = plt.get_cmap("viridis")
     for i, f in enumerate(picks):
         ax = fig.add_subplot(1, len(picks), i + 1, projection="3d")
-        for lv, t in zip(LEVELS, f["trajectories"]):
+        for lv, t in zip(f.get("level_fracs", LEVELS), f["trajectories"]):
             e = np.asarray(t["eef"])
-            ax.plot(*e.T, color=cmap(lv), lw=1.6 if lv == 0 else 1.1,
+            ax.plot(*e.T, color=cmap(min(lv, 1.0)),
+                    lw=1.6 if lv == 0 else 1.1,
                     label=f"λ={t['lam']:.2f} "
                           f"{'o' if t['success'] else 'x'}")
         ax.set_title(f"{f['family_id']}  (phase {f['phase_id']}, "
-                     f"λ_max={f['lambda_max']:.2f} {f['lambda_kind']})",
+                     f"λ_ok={f['lambda_max']:.2f} {f['lambda_kind']})",
                      fontsize=9)
         ax.legend(fontsize=7)
         ax.set_xlabel("x"); ax.set_ylabel("y"); ax.set_zlabel("z")
@@ -462,6 +534,7 @@ def run_selftest():
         top_k, lam0, lam_cap, n_bisect, seed = 2, 0.5, 4.0, 3, 0
         kp, pos_scale, max_stretch = 0.8, 0.01, 1.5
         n_seeds, w_thresh = 1, 0.25
+        with_cliff = True
 
     # mock 후보: phase 1(뒤 절반, 물체 파지·운반 중) 에 +x 주입 → 과도하면
     # goal 을 지나쳐 실패해야 한다 (cliff 존재)
@@ -486,15 +559,28 @@ def run_selftest():
     if err > 1e-6:
         ok = False; print("[FAIL] λ=0 이 데모를 재현하지 못함")
 
-    print(f"λ_max={f['lambda_max']:.3f} ({f['lambda_kind']}), "
+    print(f"λ_ok={f['lambda_ok']:.3f}  λ_fail={f['lambda_fail']:.3f} "
+          f"({f['lambda_kind']}), "
           f"probes={[(round(l, 2), s) for l, s in f['probes']]}")
-    if f["lambda_kind"] != "cliff" or not (0 < f["lambda_max"] <= A.lam_cap):
+    if f["lambda_kind"] != "cliff" or not (0 < f["lambda_fail"] <= A.lam_cap):
         ok = False; print("[FAIL] cliff 를 찾아야 한다 (+x 과주입 = 과녁 초과)")
+    if not (f["lambda_ok"] < f["lambda_fail"]):
+        ok = False; print(f"[FAIL] λ_ok({f['lambda_ok']}) >= "
+                          f"λ_fail({f['lambda_fail']})")
 
+    # 핵심: 효율 rung(λ_ok 기준 5개)은 전부 성공, cliff rung 만 실패여야 한다.
     succ = [t["success"] for t in f["trajectories"]]
-    if not (succ[0] and not succ[-1]):
-        ok = False; print(f"[FAIL] rung 성공 패턴 {succ}: 0 성공/최상단 실패여야")
+    kinds = f["rung_kind"]
+    print(f"rung kind    = {kinds}")
     print(f"rung success = {succ}")
+    eff_bad = [s for s, k in zip(succ, kinds) if k == "eff" and not s]
+    if eff_bad:
+        ok = False
+        print(f"[FAIL] 효율 rung 에 실패가 있다 — λ_ok 정의가 안 지켜졌다")
+    if kinds[-1] != "cliff" or succ[-1]:
+        ok = False; print("[FAIL] 마지막 rung 은 cliff(실패)여야 한다")
+    if len(succ) != len(LEVELS) + 1:
+        ok = False; print(f"[FAIL] rung 수 {len(succ)} != {len(LEVELS)}+1")
 
     # 열화 단조성(대체로): 최종 goal 오차가 level 에 따라 비감소
     errs = [float(np.linalg.norm(np.asarray(t["obj"])[-1] - goal))
@@ -504,6 +590,44 @@ def run_selftest():
           f"(violations {n_viol})")
     if n_viol > 1:
         ok = False; print("[FAIL] 사다리가 goal 오차 기준으로 뒤죽박죽")
+
+    # --no-cliff 경로: 효율 rung 만
+    class A2(A):
+        with_cliff = False
+    f2 = build_families({"demo_000": runner}, action_sets, sg, A2,
+                        log=lambda *a: None)[0]
+    if len(f2["trajectories"]) != len(LEVELS) or not all(
+            t["success"] for t in f2["trajectories"]):
+        ok = False
+        print(f"[FAIL] --no-cliff: rung {len(f2['trajectories'])}, "
+              f"success {[t['success'] for t in f2['trajectories']]}")
+    else:
+        print(f"--no-cliff -> {len(LEVELS)} rung 전부 성공 (순수 효율 사다리)")
+
+    # top1 모드: 후보를 합산하지 않고 후보마다 독립 family
+    r_t1 = FamilyRunner(mk, demo_eef[:-1], demo_A, zseg, goal, 0.85, 0.05,
+                        kp=0.8, pos_scale=0.01, inject_mode="top1",
+                        p_inject=1.0)
+    specs = family_specs(r_t1, 1, action_sets["phase_1"], A)
+    d_req = np.asarray(action_sets["phase_1"][0]["direction"], float)
+    w_used = np.asarray(specs[0][0]["weights"], float)
+    cos = float(np.dot(d_req, w_used)
+                / (np.linalg.norm(d_req) * np.linalg.norm(w_used)))
+    print(f"top1 모드: family {len(specs)}개, cos(Top-1 요청, 실주입) = {cos:+.3f}")
+    if abs(cos - 1.0) > 1e-6:
+        ok = False; print("[FAIL] top1 은 후보 방향을 그대로 써야 한다")
+    # 주입되는 모든 스텝의 방향이 후보 방향과 정확히 평행해야 한다 (성분별
+    # Bernoulli 를 쓰면 여기서 깨진다)
+    seq_t1 = specs[0][1]
+    nz = seq_t1[np.abs(seq_t1).sum(axis=1) > 0]
+    coss = [float(np.dot(rw, w_used) / (np.linalg.norm(rw)
+                                        * np.linalg.norm(w_used)))
+            for rw in nz]
+    print(f"    주입 스텝 {len(nz)}개, 스텝별 cos = "
+          f"[{min(coss):.3f}, {max(coss):.3f}]" if coss else "    주입 스텝 없음")
+    if not coss or min(coss) < 1.0 - 1e-9:
+        ok = False
+        print("[FAIL] top1 의 스텝별 주입 방향이 후보 방향과 평행하지 않다")
 
     # set 모드 확률성: p=0.5, 성분 2개(w=[1,0,1,...]) — 스텝별 조합이 실제로
     # 랜덤 부분집합인지 (comp0 만 / comp1 만 / 둘 다 / 없음 이 섞여야 한다)
@@ -572,11 +696,17 @@ def main():
     ap.add_argument("--kp", type=float, default=0.1)
     ap.add_argument("--pos-scale", type=float, default=0.01)
     ap.add_argument("--max-stretch", type=float, default=1.5)
-    ap.add_argument("--inject-mode", default="set",
-                    choices=["set", "random", "window"],
-                    help="set: phase 방해 성분 집합을 스텝별 랜덤 조합 (기본). "
+    ap.add_argument("--inject-mode", default="top1",
+                    choices=["top1", "set", "random", "window"],
+                    help="top1: Stage 7 후보를 합산하지 않고 각각 독립 family "
+                         "(기본 — FCM 랭킹을 보존한다). "
+                         "set: 성분 집합을 스텝별 랜덤 조합 (ablation). "
                          "random: 후보 방향 1개를 스텝별 Bernoulli (ablation). "
                          "window: Stage 7 창에서 결정적 (ablation)")
+    ap.add_argument("--with-cliff", action="store_true", default=True,
+                    help="λ_fail 에 cliff rung 을 하나 추가 (기본 on)")
+    ap.add_argument("--no-cliff", dest="with_cliff", action="store_false",
+                    help="효율 사다리만 (cliff rung 없음)")
     ap.add_argument("--p-inject", type=float, default=0.5,
                     help="set: 성분별 / random: 스텝별 주입 확률")
     ap.add_argument("--n-seeds", type=int, default=2,

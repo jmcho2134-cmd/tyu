@@ -48,6 +48,14 @@ try:
 except Exception:                                             # pragma: no cover
     _HAS_SK = False
 
+def fcm_input_mask():
+    """FCM 입력으로 쓸 feature 열. R_θ 의 reward_input_mask 와 값은 같지만
+    근거가 다르므로 이름을 분리한다: 여기서 action_magnitude / energy 를 빼는
+    이유는 "λ 의 대리변수" (그건 Stage 10 의 문제) 가 아니라, 둘이 δ 로부터
+    거의 결정론적으로 정해져 잔차 예측에 새 정보를 주지 않기 때문이다."""
+    return fs.reward_input_mask()
+
+
 N_PHASE_SLOTS = 8                     # one-hot 자리 (phase 3개여도 고정폭)
 # obs 는 절대 좌표만 (quat 제외): screening 은 cache(F, eef_pos, obj_pos)만
 # 으로 돌아야 하므로, 학습 입력도 같은 채널로 제한해 분포를 일치시킨다.
@@ -306,7 +314,7 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
     G6 가 함께 판정한다 (>50% 면 분기 자체가 깨진 것).
     """
     rows = dict(C=[], O=[], A=[], D=[], lam=[], Z=[], rho=[], h=[], Y=[],
-                clip=[], ep=[], t=[])
+                clip=[], ep=[], t=[], G=[])
     n_drop, n_anchor, n_anchor_drop = 0, 0, 0
     tol = getattr(args, "anchor_drift_tol", 0.3)
     for did, roller in rollers.items():
@@ -348,6 +356,8 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
                 zc = sg.phase_of(phi)
                 rc = sg.rho(zc, phi)
 
+                goal_row = np.asarray(roller.goal, float).ravel()[:3]
+
                 def push(delta, lam, resid, clip):
                     for h in range(args.horizon):
                         rows["C"].append(phi)
@@ -362,6 +372,11 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
                         rows["clip"].append(clip)
                         rows["ep"].append(did)
                         rows["t"].append(t)
+                        # goal 을 실제 입력으로 넣는다. 이전에는 fit 이 goal 을
+                        # 받지 않아 3열이 항상 0 이었고, 데모마다 객체·bin 기하가
+                        # 다른 20편 규모에서는 FCM 이 goal-상대 방향("bin 반대쪽
+                        # 으로 밀기")을 학습할 근거가 없어진다.
+                        rows["G"].append(goal_row)
 
                 push(np.zeros(roller.adim), 0.0, drift, infoA["clip"])
                 for lv in levels:
@@ -383,7 +398,23 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
     return data
 
 
-def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print):
+def subgoal_channels(sg):
+    """subgoal.json 의 어느 phase 에서든 조건으로 쓰인 feature 의 마스크.
+
+    G6 판정 범위가 이것이어야 하는 이유: ρ / ρ_worst / satisfies / phase_of 가
+    전부 이 열들만 읽는다. 리플레이가 이 열에서 드리프트하면 라벨이 오염되고,
+    다른 열이 흔들리는 것은 (라벨에 안 들어가므로) 상대적으로 무해하다.
+    """
+    m = np.zeros(fs.N_FEATURES, bool)
+    if sg is None:
+        return m
+    for k in range(sg.K):
+        for n in sg.spec["phases"][str(k)]["features"]:
+            m[fs.index_of(n)] = True
+    return m
+
+
+def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None):
     """G6: 분기·리플레이가 믿을 만한가. 두 조건의 AND:
 
     (1) 유지된 anchor 에서 리플레이 드리프트(λ=0 행의 Y)가 perturbation
@@ -393,6 +424,14 @@ def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print):
         의미가 없다 (mock 에서 실측).
     (2) anchor 드롭률 ≤ max_anchor_drop. 접촉 순간 몇 개를 거르는 것은
         정상이지만 절반 이상 버려진다면 분기 자체가 깨진 것이다.
+
+    판정 범위 (sg 를 넘기면): subgoal 조건에 쓰인 feature 전부.
+    이전에는 kind == PROGRESS 로 한정했는데, kind 는 "phase 경계를 만들 자격"을
+    정하는 축이지 게이트 범위가 아니다. 그 결과 contact(실측 0.386)와
+    gripper_open(0.635)이 판정에서 빠졌고, 이 둘은 정확히 phase 0·2 의 subgoal
+    조건 feature 다 — satisfies(0) 은 contact 하나로 결정된다. 게이트가 통과를
+    선언하는 동안 라벨을 정의하는 채널이 검사되지 않고 있었다.
+    sg 가 없으면 (mock 등) PROGRESS 로 폴백한다.
     """
     m0 = data["lam"] == 0.0
     if not m0.any():
@@ -404,26 +443,33 @@ def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print):
     active = effect > (1e-9 + 0.01 * scale)
     ratio = np.where(active, drift / np.maximum(effect, 1e-12), np.nan)
 
-    # 판정은 위치 기반 progress 채널: ρ 와 라벨이 실제로 미분하는 눈금이다.
-    # 이진 채널(contact/gripper)의 flicker 는 zero-mean 프레임 지터라 eq
-    # 조건 스케일(0.5)로 환산하면 d_start 대비 무시 가능 — 정보로만 출력.
-    # 속도/저크류는 정지 물체의 떨림이라 원리적으로 재현 불가(라벨에서도
-    # 학습 불가로 드러남) — 마찬가지로 정보만.
-    prog = np.array([fs.SPEC[n].kind == fs.PROGRESS for n in fs.NAMES])
-    r_gate = np.where(prog, ratio, np.nan)
+    gated = subgoal_channels(sg)
+    if gated.any():
+        scope = "subgoal 조건 채널"
+    else:
+        gated = np.array([fs.SPEC[n].kind == fs.PROGRESS for n in fs.NAMES])
+        scope = "progress 채널 (subgoal 미제공 폴백)"
+    r_gate = np.where(gated, ratio, np.nan)
+    if not np.isfinite(r_gate).any():
+        log(f"[G6] FAIL: 판정 대상({scope})에 유효한 비율이 없음")
+        return False, ratio
     worst = float(np.nanmax(r_gate))
     j = int(np.nanargmax(r_gate))
     drop = float(data.get("anchor_drop_rate", 0.0))
     ok = (worst <= tol_ratio) and (drop <= max_anchor_drop)
-    info = ", ".join(f"{fs.NAMES[k]}={ratio[k]:.2f}"
-                     for k in range(fs.N_FEATURES)
-                     if not prog[k] and np.isfinite(ratio[k])
-                     and ratio[k] > tol_ratio)
-    log(f"[G6] {'PASS' if ok else 'FAIL'}: λ=0 drift/effect (progress 채널) "
+    log(f"[G6] {'PASS' if ok else 'FAIL'}: λ=0 drift/effect ({scope}) "
         f"최대 {worst:.3f} ({fs.NAMES[j]}) "
         f"{'<=' if worst <= tol_ratio else '>'} {tol_ratio}, "
         f"anchor drop {drop:.0%} "
         f"{'<=' if drop <= max_anchor_drop else '>'} {max_anchor_drop:.0%}")
+    inside = ", ".join(f"{fs.NAMES[k]}={ratio[k]:.3f}"
+                       for k in range(fs.N_FEATURES)
+                       if gated[k] and np.isfinite(ratio[k]))
+    log(f"     판정 대상: {inside}")
+    info = ", ".join(f"{fs.NAMES[k]}={ratio[k]:.2f}"
+                     for k in range(fs.N_FEATURES)
+                     if not gated[k] and np.isfinite(ratio[k])
+                     and ratio[k] > tol_ratio)
     if info:
         log(f"     (정보: 비판정 채널 중 비율 초과 — {info})")
     return ok, ratio
@@ -441,8 +487,14 @@ class FCM:
                                 max_iter=max_iter, random_state=seed,
                                 early_stopping=True, n_iter_no_change=25,
                                 validation_fraction=0.1)
-        self.in_mask = fs.reward_input_mask()
+        # NOTE: reward_input_mask 는 원래 R_θ 용이다 (action_magnitude/energy 를
+        # 빼는 이유는 "λ 의 대리변수라 ranking loss 를 자기 자신으로 푼다"이고
+        # 그것은 Stage 10 의 문제다). FCM 입력에는 그 논거가 적용되지 않지만,
+        # 두 채널은 여기서도 δ 로부터 거의 결정론적이라 잔차 예측에 정보를 주지
+        # 않는다. 마스크를 분리해 둔다 — 의미를 섞지 않기 위해서다.
+        self.in_mask = fcm_input_mask()
         self.goal = None
+        self.has_goal = False      # 학습 시 goal 열에 실제 값이 들어갔는가
 
     def _x(self, C, A, D, h, O, Z, g=None):
         C = np.atleast_2d(np.asarray(C, float))[:, self.in_mask]
@@ -462,15 +514,31 @@ class FCM:
             zz = np.repeat(zz, n)
         oh = np.zeros((n, N_PHASE_SLOTS))
         oh[np.arange(n), np.clip(zz, 0, N_PHASE_SLOTS - 1)] = 1.0
-        gg = self.goal if g is None else np.asarray(g, float).ravel()
-        gg = np.zeros(3) if gg is None else gg
-        return np.hstack([C, A, D, h, O, oh, np.tile(gg, (n, 1))])
+        # goal: 행별 (n,3) 또는 단일 (3,). None 이면 0 (구 동작).
+        gg = self.goal if g is None else g
+        if gg is None:
+            G = np.zeros((n, 3))
+        else:
+            G = np.atleast_2d(np.asarray(gg, float))
+            if len(G) == 1 and n > 1:
+                G = np.repeat(G, n, axis=0)
+            if len(G) != n:
+                raise ValueError(f"goal rows {len(G)} != batch {n}")
+        return np.hstack([C, A, D, h, O, oh, G])
 
     def fit(self, data, goal=None):
-        self.goal = None if goal is None else np.asarray(goal, float).ravel()
+        """goal 은 data["G"] (행별) 를 우선 쓰고, 없으면 인자 goal (단일)."""
+        g = data.get("G") if isinstance(data, dict) else None
+        if g is None and goal is not None:
+            g = np.asarray(goal, float).ravel()
+        self.goal = None if g is None else np.asarray(g, float)
+        self.has_goal = g is not None
         X = self._x(data["C"], data["A"], data["D"], data["h"],
-                    data["O"], data["Z"])
+                    data["O"], data["Z"], g=g)
         self.net.fit(self.xs.fit_transform(X), self.ys.fit_transform(data["Y"]))
+        # 배치 전체 goal 을 self.goal 에 남기면 추론 시 행수가 안 맞는다.
+        # 학습에 goal 을 썼다는 사실만 남기고 값은 호출자가 넘긴다.
+        self.goal = None
         return self
 
     def predict(self, C, A, D, h, O, Z, g=None):
@@ -496,12 +564,19 @@ class FCMEnsemble:
         P = np.stack([m.predict(*a, **kw) for m in self.members])
         return P.mean(axis=0), P.std(axis=0)
 
+    @property
+    def has_goal(self):
+        """멤버 전부가 goal 열을 실제 값으로 학습했는가. 구 pkl 은 False —
+        그 경우 screening 에서 goal 을 넘기면 학습 분포와 어긋난다."""
+        return all(getattr(m, "has_goal", False) for m in self.members)
+
     def save(self, path):
         """sklearn 객체만 pickle 한다: 커스텀 클래스를 통째로 담으면
         `python fcm.py` 실행 시 __main__ 네임스페이스로 저장되어 다른
         프로세스가 로드하지 못한다 (실측)."""
-        state = dict(members=[dict(xs=m.xs, ys=m.ys, net=m.net,
-                                   goal=m.goal) for m in self.members])
+        state = dict(members=[dict(xs=m.xs, ys=m.ys, net=m.net, goal=m.goal,
+                                   has_goal=bool(m.has_goal))
+                              for m in self.members])
         with open(path, "wb") as f:
             pickle.dump(state, f)
 
@@ -512,6 +587,7 @@ class FCMEnsemble:
         ens = FCMEnsemble(n=len(state["members"]))
         for m, s in zip(ens.members, state["members"]):
             m.xs, m.ys, m.net, m.goal = s["xs"], s["ys"], s["net"], s["goal"]
+            m.has_goal = bool(s.get("has_goal", False))
         return ens
 
 
@@ -591,21 +667,29 @@ class Screener:
         self.lam, self.h = float(lam_probe), float(horizon_s)
         self.beta = float(beta)
 
-    def drho(self, phase, phi, act, obs, d):
+    def drho(self, phase, phi, act, obs, d, goal=None):
         """anchor 배치에 대한 (Δρ̂ 평균, 불확실성). d 는 단위벡터.
 
-        ρ 는 비클립 rho_raw: 클립판은 subgoal 에서 먼 anchor 에서 0 에
-        포화되어 '더 나빠짐'이 안 보인다 (screening 신호 소멸)."""
+        목적함수는 rho_worst (위반마진·조건별 정규화, rho.py 헤더 참조):
+        subgoal 은 조건들의 AND 인데 rho 의 RMS·전역 d_start 정규화는 조건 하나의
+        파괴를 √(1/J) 로 희석하고 스케일이 큰 조건이 눈금을 독점한다. 실측
+        (PickPlaceBread pre phase): 파지 완전 실패 Δρ=−0.148 vs eef 5cm 떼기
+        Δρ=−0.139 — 태스크가 죽는 사건과 손이 조금 떨어진 것이 구별되지 않아
+        신호 상한이 앙상블 불확실성(0.01~0.02) 수준으로 눌렸고, 그 결과
+        steepest 가 3 phase 전부에서 랜덤 방향에 패배했다.
+        rho_worst 는 같은 사건에 Δ=−0.84 vs −0.10 을 준다.
+        (클립하지 않으므로 '시작보다 더 나쁨'이 음수로 보이는 성질은 유지된다.)
+        """
         delta = self.lam * np.asarray(d, float)
         n = len(phi)
         mu, sd = self.ens.predict(phi, act, np.tile(delta, (n, 1)),
-                                  self.h, obs, np.full(n, phase, int))
-        r0 = self.sg.rho_raw(phase, phi)
+                                  self.h, obs, np.full(n, phase, int), g=goal)
+        r0 = self.sg.rho_worst(phase, phi)
         drs, dr_sd = [], []
         for i in range(n):
-            drs.append(self.sg.rho_raw(phase, phi[i] + mu[i]) - r0[i])
-            hi = self.sg.rho_raw(phase, phi[i] + mu[i] + sd[i])
-            lo = self.sg.rho_raw(phase, phi[i] + mu[i] - sd[i])
+            drs.append(self.sg.rho_worst(phase, phi[i] + mu[i]) - r0[i])
+            hi = self.sg.rho_worst(phase, phi[i] + mu[i] + sd[i])
+            lo = self.sg.rho_worst(phase, phi[i] + mu[i] - sd[i])
             dr_sd.append(abs(hi - lo) / 2.0)
         return float(np.mean(drs)), float(np.mean(dr_sd)), np.array(drs)
 
@@ -613,8 +697,13 @@ class Screener:
         """클수록 좋은 screening_score: 예측 열화 − β·불확실성."""
         return -dr - self.beta * unc
 
-    def steepest(self, phase, phi, act, obs, cone, steps=3, fd=0.15):
-        """FD 로 ∇_d Δρ̂ 를 얻어 ρ 를 가장 깎는 단위 방향을 고정점 반복."""
+    def steepest(self, phase, phi, act, obs, cone, steps=3, fd=0.15,
+                 goal=None):
+        """FD 로 ∇_d Δρ̂ 를 얻어 ρ_worst 를 가장 깎는 단위 방향을 고정점 반복.
+
+        rho_worst 의 기본 집계가 p=4 인 이유가 여기 있다: 정확한 max(p→∞)는
+        비활성 조건에 대한 기울기가 0 이라 이 FD 가 계단 함수를 보게 된다.
+        p=4 는 max 에 가까우면서 미분 가능하다."""
         adim = act.shape[1]
         d = np.zeros(adim)
         for _ in range(max(1, steps)):
@@ -623,9 +712,11 @@ class Screener:
                 dp, dm = d.copy(), d.copy()
                 dp[i] += fd; dm[i] -= fd
                 np_, _, _ = self.drho(phase, phi, act, obs,
-                                      dp / max(np.linalg.norm(dp), 1e-9))
+                                      dp / max(np.linalg.norm(dp), 1e-9),
+                                      goal=goal)
                 nm_, _, _ = self.drho(phase, phi, act, obs,
-                                      dm / max(np.linalg.norm(dm), 1e-9))
+                                      dm / max(np.linalg.norm(dm), 1e-9),
+                                      goal=goal)
                 g[i] = (np_ - nm_) / (2 * fd)
             d_new = project_to_cone(-g, *cone)
             if d_new is None:
@@ -652,7 +743,8 @@ def condition_attack_directions(sg, phase):
     return out
 
 
-def screen_phase(scr, phase, phi, act, obs, actions_seg, rng, args, log=print):
+def screen_phase(scr, phase, phi, act, obs, actions_seg, rng, args, log=print,
+                 goal=None):
     """한 phase 의 후보 생성 → 점수화 → 다양성 Top-K."""
     adim = act.shape[1]
     a_, b_ = 0, len(actions_seg)
@@ -664,7 +756,8 @@ def screen_phase(scr, phase, phi, act, obs, actions_seg, rng, args, log=print):
         log(f"    cone blocked: {', '.join(blk)}")
 
     cand = []
-    d_st = scr.steepest(phase, phi, act, obs, cone, steps=args.refine_steps)
+    d_st = scr.steepest(phase, phi, act, obs, cone, steps=args.refine_steps,
+                        goal=goal)
     if d_st is not None:
         cand.append(("steepest", d_st))
     # 조건 공격: FCM 야코비안 없이 좌표축이 아닌 "그 feature 를 미는" 방향을
@@ -695,15 +788,23 @@ def screen_phase(scr, phase, phi, act, obs, actions_seg, rng, args, log=print):
 
     scored = []
     for nm, d in cand:
-        dr, unc, per_anchor = scr.drho(phase, phi, act, obs, d)
+        dr, unc, per_anchor = scr.drho(phase, phi, act, obs, d, goal=goal)
         scored.append(dict(name=nm, d=d, drho=dr, unc=unc,
                            score=scr.score(dr, unc), per_anchor=per_anchor))
     scored.sort(key=lambda r: -r["score"])
 
-    picked = []
+    # 점수 하한. 이것이 없으면 Top-K 를 채우려고 score ≤ 0 인 후보 — 즉
+    # "불확실성을 감안하면 열화시킬 것으로 예측되지 않는 방향" — 까지 실려
+    # 나간다 (실측: action_sets.json 12개 중 3개가 음수 점수였고, Stage 8 의
+    # 성분 합산이 그것들을 그대로 주입 방향에 섞었다).
+    min_score = float(getattr(args, "min_score", 0.0))
+    picked, n_below = [], 0
     for r in scored:
         if len(picked) >= args.top_k:
             break
+        if r["score"] <= min_score:
+            n_below += 1
+            continue
         if any(abs(float(np.dot(r["d"], p["d"]))) > args.cos_max
                for p in picked):
             continue
@@ -711,6 +812,11 @@ def screen_phase(scr, phase, phi, act, obs, actions_seg, rng, args, log=print):
     for r in picked:
         log(f"    {r['name']:<16} drho={r['drho']:+.3f}  unc={r['unc']:.3f}  "
             f"score={r['score']:+.3f}")
+    if n_below:
+        log(f"    (score <= {min_score:g} 로 제외 {n_below}개)")
+    if len(picked) < args.top_k:
+        log(f"    [warn] phase {phase}: 후보 {len(picked)}/{args.top_k} 개만 "
+            f"기준 통과 — 열화 방향이 부족하다 (FCM 재학습/λ_probe 상향 검토)")
     return picked, scored
 
 
@@ -789,7 +895,7 @@ def cmd_collect(args):
     finally:
         if env is not None:
             env.close()
-    ok, ratio = gate_g6(data, tol_ratio=args.g6_tol)
+    ok, ratio = gate_g6(data, tol_ratio=args.g6_tol, sg=sg)
     os.makedirs(args.out_dir, exist_ok=True)
     save_dataset(os.path.join(args.out_dir, "fcm_dataset.hdf5"), data)
     viz_g6(data, ratio, os.path.join(args.out_dir, "fcm_g6_residual.png"))
@@ -802,7 +908,11 @@ def cmd_collect(args):
 def cmd_train(args, data=None):
     if data is None:
         data = load_dataset(os.path.join(args.out_dir, "fcm_dataset.hdf5"))
-    ok, _ = gate_g6(data, tol_ratio=args.g6_tol)
+    try:
+        sg = Subgoal.load(args.subgoal)
+    except Exception:
+        sg = None
+    ok, _ = gate_g6(data, tol_ratio=args.g6_tol, sg=sg)
     if not ok and not args.no_gate:
         raise SystemExit("[G6] FAIL — 학습 중단")
     # holdout: 시간 순 20% (무작위 셔플은 같은 rollout 의 h 행이 양쪽에 새는
@@ -823,15 +933,18 @@ def cmd_train(args, data=None):
     Yc = data["Y"].copy()
     Yc[data["lam"] == 0.0] = 0.0
     dd = dict(data); dd["Y"] = Yc
-    tr = {k: v[~m_te] for k, v in dd.items() if k in
-          ("C", "O", "A", "D", "h", "Z", "Y")}
-    te = {k: v[m_te] for k, v in dd.items() if k in
-          ("C", "O", "A", "D", "h", "Z", "Y")}
+    keep = ("C", "O", "A", "D", "h", "Z", "Y", "G")
+    tr = {k: v[~m_te] for k, v in dd.items() if k in keep}
+    te = {k: v[m_te] for k, v in dd.items() if k in keep}
+    if "G" not in tr:
+        print("[warn] 데이터셋에 goal 열(G)이 없다 — 구 fcm_dataset.hdf5 다. "
+              "goal 입력 3열이 0 으로 학습된다 (재수집 권장).")
 
     ens = FCMEnsemble(n=args.ensemble, hidden=tuple(args.hidden),
                       max_iter=args.max_iter)
     ens.fit(tr)
-    mu, sd = ens.predict(te["C"], te["A"], te["D"], te["h"], te["O"], te["Z"])
+    mu, sd = ens.predict(te["C"], te["A"], te["D"], te["h"], te["O"], te["Z"],
+                         g=te.get("G"))
     r2 = r2_per_feature(te["Y"], mu)
     print("[train] heldout R^2 (rollout 단위 분할):")
     for n, v in zip(fs.NAMES, r2):
@@ -857,7 +970,7 @@ def cmd_screen(args, ens=None):
     for phase in range(K):
         log = print
         log(f"  phase {phase} [{sg.labels[phase]}]")
-        phi, act, obs, segs, fracs = [], [], [], [], []
+        phi, act, obs, segs, fracs, goals = [], [], [], [], [], []
         for e in entries:
             did = e["demo_id"]
             T = len(e["F"])
@@ -875,13 +988,17 @@ def cmd_screen(args, ens=None):
                            if e.get("eef_pos") is not None
                            else np.zeros(N_OBS))
                 fracs.append((t - a_) / max(1, b_ - a_))
+                goals.append(np.asarray(e["goal"], float).ravel()[:3])
             segs.append(e["actions"][a_:b_])
         if not phi:
             continue
         phi, act, obs = np.array(phi), np.array(act), np.array(obs)
+        # goal 은 앙상블이 goal 로 학습된 경우에만 넘긴다. 구 pkl 은 goal 열이
+        # 0 으로 학습됐으므로 실제 값을 주면 학습 분포와 어긋난다.
+        g_arg = np.array(goals) if ens.has_goal else None
         actions_seg = np.concatenate(segs, axis=0)
         picked, scored = screen_phase(scr, phase, phi, act, obs, actions_seg,
-                                      rng, args)
+                                      rng, args, goal=g_arg)
         out = []
         for i, r in enumerate(picked):
             s0, dur = injection_window(r["per_anchor"], fracs)
@@ -906,18 +1023,29 @@ def cmd_screen(args, ens=None):
     return sets, all_scored, (entries, boundaries, sg)
 
 
-def gate_g7(args, sets, all_scored, pipeline, log=print):
+def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None):
     """Top-K recall > random: FCM 랭킹 상위권이 실측(분기 rollout) 상위권과
-    겹치는가. 실측 Δρ = 같은 anchor 에서 λ_probe·d 를 실제로 밀어본 결과."""
+    겹치는가. 실측 Δρ = 같은 anchor 에서 λ_probe·d 를 실제로 밀어본 결과.
+
+    검증 대상은 action_sets.json 에 실제로 실린 방향(picked)이다. 이전 구현은
+    fcm_top = range(top_k), 즉 scored[:top_k] 를 FCM 의 Top-K 로 봤는데, 출하되는
+    것은 다양성 필터와 점수 하한을 통과한 picked 이므로 게이트가 파이프라인이
+    쓰지 않는 집합을 검증하고 있었다.
+
+    실측 눈금도 screening 과 같은 rho_worst 를 쓴다 — 다른 눈금으로 재면
+    recall 이 목적함수 불일치를 재게 된다.
+    """
     entries, boundaries, sg = pipeline
     rollers, env = build_rollers(entries, warmup=args.warmup)
     rng = np.random.default_rng(args.seed + 2)
-    recalls, randoms = [], []
+    recalls, randoms, diag = [], [], {}
     try:
         for phase, scored in all_scored.items():
             pool = scored[:args.g7_pool]           # FCM 랭킹 순 상위 pool
             if len(pool) < args.top_k + 2:
+                log(f"  phase {phase}: pool {len(pool)} < top_k+2 — SKIP")
                 continue
+            shipped = {c["name"] for c in sets.get(f"phase_{phase}", [])}
             # Branch A(리플레이) 기준으로 실측 — 학습 라벨과 같은 기준선
             baseA = {}
             for did, roller in list(rollers.items())[:args.g7_demos]:
@@ -939,32 +1067,57 @@ def gate_g7(args, sets, all_scored, pipeline, log=print):
                     if out is None:
                         continue
                     phi_t = roller.phi_at(t)
-                    r_end = sg.rho_raw(phase, phi_t + (out[-1] - outA[-1]))
-                    r_ref = sg.rho_raw(phase, phi_t)
+                    r_end = sg.rho_worst(phase, phi_t + (out[-1] - outA[-1]))
+                    r_ref = sg.rho_worst(phase, phi_t)
                     drs.append(r_end - r_ref)
                 meas.append(float(np.mean(drs)) if drs else np.nan)
             meas = np.asarray(meas)
             okm = np.isfinite(meas)
             if okm.sum() < args.top_k + 2:
+                log(f"  phase {phase}: 측정 성공 {int(okm.sum())} < top_k+2 — SKIP")
                 continue
-            order_true = np.argsort(meas[okm])          # 가장 음수 = 최고 열화
             idx_ok = np.where(okm)[0]
-            true_top = set(idx_ok[order_true[:args.top_k]].tolist())
-            fcm_top = set(range(min(args.top_k, len(pool))))
-            rec = len(true_top & fcm_top) / args.top_k
-            rnd = args.top_k / okm.sum()
+            order_true = np.argsort(meas[okm])          # 가장 음수 = 최고 열화
+            k_eff = min(args.top_k, int(okm.sum()) - 1)
+            true_top = set(idx_ok[order_true[:k_eff]].tolist())
+            # 실제 출하된 방향(picked)의 pool 내 위치
+            fcm_top = {i for i, r in enumerate(pool)
+                       if r["name"] in shipped and okm[i]}
+            if not fcm_top:
+                log(f"  phase {phase}: 출하 방향이 pool/측정 안에 없음 — SKIP")
+                continue
+            rec = len(true_top & fcm_top) / max(1, len(fcm_top))
+            rnd = k_eff / int(okm.sum())
             recalls.append(rec); randoms.append(rnd)
-            log(f"  phase {phase}: recall@{args.top_k} = {rec:.2f} "
-                f"(random {rnd:.2f}; pool {int(okm.sum())})")
+            diag[f"phase_{phase}"] = dict(
+                recall=round(rec, 3), random=round(rnd, 3),
+                n_pool=int(okm.sum()), n_shipped=len(fcm_top), k_eff=k_eff,
+                measured_drho_worst={pool[i]["name"]: round(float(meas[i]), 4)
+                                     for i in idx_ok},
+                shipped=sorted(shipped))
+            log(f"  phase {phase}: recall = {rec:.2f} "
+                f"(random {rnd:.2f}; pool {int(okm.sum())}, "
+                f"출하 {len(fcm_top)}개)")
     finally:
         if env is not None:
             env.close()
     if not recalls:
         log("[G7] SKIP: 측정 가능한 phase 없음")
+        if out_path:
+            with open(out_path, "w") as f:
+                json.dump(dict(g7_pass=None, phases=diag), f,
+                          ensure_ascii=False, indent=1)
         return None
     ok = float(np.mean(recalls)) > float(np.mean(randoms))
     log(f"[G7] {'PASS' if ok else 'FAIL'}: mean recall {np.mean(recalls):.2f} "
         f"vs random {np.mean(randoms):.2f}")
+    if out_path:
+        with open(out_path, "w") as f:
+            json.dump(dict(g7_pass=bool(ok),
+                           mean_recall=round(float(np.mean(recalls)), 3),
+                           mean_random=round(float(np.mean(randoms)), 3),
+                           phases=diag), f, ensure_ascii=False, indent=1)
+        log(f"[out] {out_path}")
     return ok
 
 
@@ -1124,14 +1277,29 @@ def run_selftest():
         anchors, horizon, levels = 3, 6, 3
         delta_scale, dirs_per_level, max_clip = 0.3, 4, 0.6
         anchor_drift_tol = 0.3
+        min_score = 0.0
     data = collect(rollers, boundaries, sg, A, rng,
                    scales=roller.F0.std(axis=0), log=lambda *a: None)
     print(f"collected {len(data['Y'])} rows "
           f"(λ=0 {int((data['lam'] == 0).sum())})")
 
-    g6, _ = gate_g6(data)
+    # G6: subgoal 조건 채널 범위로 판정 (sg 전달). mock 의 조건 채널은
+    # eef_object_dist / object_goal_dist / contact 셋이다.
+    g6, _ = gate_g6(data, sg=sg)
     if not g6:
         ok = False
+    gated = subgoal_channels(sg)
+    want = {"eef_object_dist", "object_goal_dist", "contact"}
+    got = {fs.NAMES[i] for i in np.where(gated)[0]}
+    if got != want:
+        ok = False; print(f"[FAIL] G6 판정 범위 {got} != {want}")
+    else:
+        print(f"G6 판정 범위 = subgoal 조건 채널 {sorted(got)} "
+              f"(kind 기반 PROGRESS 한정이 아님)")
+    if "G" not in data:
+        ok = False; print("[FAIL] collect 가 goal 열(G)을 담지 않음")
+    elif data["G"].shape != (len(data["Y"]), 3):
+        ok = False; print(f"[FAIL] G shape {data['G'].shape}")
 
     ens = FCMEnsemble(n=3, hidden=(48,), max_iter=400)
     ens.fit(data, log=lambda *a: None)
@@ -1163,6 +1331,24 @@ def run_selftest():
           f"drho={best['drho']:+.3f}")
     if cos_x < 0.6 or best["drho"] >= -0.01:
         ok = False; print("[FAIL] screening 이 정답 방향(+x)을 못 찾음")
+
+    # 점수 하한: score <= 0 인 후보는 절대 실리지 않는다
+    if any(r["score"] <= 0.0 for r in picked):
+        ok = False
+        print(f"[FAIL] score<=0 후보가 출하됨: "
+              f"{[(r['name'], round(r['score'], 4)) for r in picked]}")
+    else:
+        print(f"점수 하한: 출하 {len(picked)}개 전부 score>0 "
+              f"({[round(r['score'], 3) for r in picked]}); "
+              f"pool 내 score<=0 후보 {sum(1 for r in scored if r['score'] <= 0)}개 제외")
+
+    # 하한을 비현실적으로 올리면 아무것도 통과하지 않아야 한다 (필터가 실제로 동작)
+    class S2(S):
+        min_score = 1e6
+    p2, _ = screen_phase(scr, 0, phi, act, obs, roller.actions[:40], rng, S2,
+                         log=lambda *a: None)
+    if p2:
+        ok = False; print(f"[FAIL] min_score=1e6 인데 {len(p2)}개 통과")
 
     # G7 mock: 실측도 mock branch 로 (screening 과 같은 rho_raw 눈금)
     meas = []
@@ -1209,7 +1395,13 @@ def add_args(ap):
     ap.add_argument("--hidden", type=int, nargs="+", default=[96, 96])
     ap.add_argument("--max-iter", type=int, default=1200)
     # screen
-    ap.add_argument("--lam-probe", type=float, default=0.5)
+    # λ_probe 기본값 1.0: 학습 delta 크기는 graded_levels(0.3, 4) =
+    # [0.075, 0.189, 0.476, 1.2] 이므로 1.0 은 분포 상단(외삽 아님)이다.
+    # 0.5 에서는 8스텝 안에 subgoal 조건을 실제로 흔들 수 없어 |Δρ̂| 가 0.02~0.08
+    # 로 앙상블 불확실성(0.013~0.025) 수준이었고, 방향 랭킹이 잡음 정렬이 됐다.
+    # 1.0 으로 올리면 move phase 에서 axis[grip−](= 운반 중 파지 해제)가
+    # Δρ_worst=−1.39 로 1위가 되고 steepest 도 상위권에 든다 (실측).
+    ap.add_argument("--lam-probe", type=float, default=1.0)
     ap.add_argument("--beta", type=float, default=1.0)
     ap.add_argument("--top-k", type=int, default=4)
     ap.add_argument("--screen-anchors", type=int, default=3)
@@ -1217,7 +1409,12 @@ def add_args(ap):
     ap.add_argument("--cos-max", type=float, default=0.95)
     ap.add_argument("--sat-frac", type=float, default=0.5)
     ap.add_argument("--refine-steps", type=int, default=2)
+    ap.add_argument("--min-score", type=float, default=0.0,
+                    help="Top-K 에 실을 최소 screening_score. 0 이면 '불확실성을 "
+                         "감안해도 열화가 예측되는' 방향만 통과")
     # G7
+    ap.add_argument("--no-g7", action="store_true",
+                    help="screen 후 G7 실측 검증 생략 (robosuite 불필요)")
     ap.add_argument("--g7-pool", type=int, default=10)
     ap.add_argument("--g7-anchors", type=int, default=2)
     ap.add_argument("--g7-demos", type=int, default=2)
@@ -1240,7 +1437,11 @@ def main():
         ens, _ = cmd_train(args, data)
     if args.cmd in ("screen", "all"):
         sets, scored, pipeline = cmd_screen(args, ens)
-        gate_g7(args, sets, scored, pipeline)
+        if args.no_g7:
+            print("[G7] 건너뜀 (--no-g7). 문서 G7 은 미판정 상태로 남는다.")
+        else:
+            gate_g7(args, sets, scored, pipeline,
+                    out_path=os.path.join(args.out_dir, "g7_diag.json"))
 
 
 if __name__ == "__main__":
