@@ -60,3 +60,19 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\subgoal_discover.py
 |Δρ_worst| 가 작은 조건은 FCM screening 이 사실상 볼 수 없습니다.
 ==============================================================================
 PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+
+
+[verify] G4 PASS / G5 PASS
+PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\verify_subgoal.py
+[V1] 경계 커버리지: 97%  pre=100%  move=95%  post=95%
+[V2] pre       ablation 생존 조건: contact(v=0.000)
+[V2] move      ablation 생존 조건: —
+[V2] post      ablation 생존 조건: contact(v=0.000)
+[G4] PASS: 필수 경계 ['pre', 'post'] 생존 확인 (move 는 객체 채널 정의라 참고만)
+[V3] phase 역행률 0.30% (스텝 7765개), 세그먼터 z 일치율 89.8%
+[G5] PASS: 역행 0.30% < 5%
+[V4] leave-one-out 경계 커버리지: 95% (20 folds; 데모 수가 적으면 참고용)
+
+[verify] G4 PASS / G5 PASS
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
