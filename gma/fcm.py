@@ -371,9 +371,14 @@ def collect(rollers, boundaries, sg, args, rng, scales=None, log=print):
                 phi_rep = infoA.get("phi0")
                 if anchor_rho_tol is not None and phi_rep is not None:
                     zc0 = sg.phase_of(phi_rep)
-                    d_rho = abs(sg.rho_worst(zc0, phi_rep + drift[-1])
-                                - sg.rho_worst(zc0, phi_rep))
-                    if d_rho > anchor_rho_tol:
+                    # 전 horizon 의 최댓값. drift[-1] (마지막 h) 만 보면
+                    # 중간 h 에서 contact 가 뒤집히고 h=H 에서 회복된 anchor 를
+                    # 놓친다 — 실측: 그렇게 놓친 anchor 1개가 224행의 drift_ρ
+                    # RMS 를 0.0002 에서 0.0562 로 (280배) 끌어올렸다.
+                    r0 = sg.rho_worst(zc0, phi_rep)
+                    d_all = np.abs(
+                        sg.rho_worst(zc0, phi_rep[None, :] + drift) - r0)
+                    if float(np.max(d_all)) > anchor_rho_tol:
                         n_anchor_drop += 1
                         n_drop_rho += 1
                         continue
@@ -460,11 +465,21 @@ def subgoal_channels(sg):
     return m
 
 
-def rho_drift_effect(data, sg, per_axis=None):
-    """phase 별 (drift_ρ, effect_ρ, n0, n1) — ρ_worst 공간에서 재는 리플레이 오차.
+def rho_drift_effect(data, sg, out_thr=0.15):
+    """phase 별 ρ_worst 공간 리플레이 오차 통계.
 
-    per_axis: (adim,) bool 또는 None. 주면 λ>0 행 중 δ 가 그 축들에 유의미한
-    성분을 가진 행만으로 effect 를 잰다 (분모 희석 방지).
+    -> {k: dict(drift, effect, ratio, n0, n1, d_med, d_p95, d_max, n_out,
+                frac_out)}
+
+    RMS 만 보면 안 되는 이유(실측): phase 0 의 λ=0 행 224개 중 **1개**가
+    contact 완전 뒤집힘으로 drift_ρ = 0.841 을 내고, 그 한 행이 RMS 를 0.0002
+    에서 0.0562 로 (280배) 끌어올렸다. 중앙값은 0.00003, 95 백분위는 0.0004 —
+    리플레이 자체는 거의 완벽하다. 그래서 분포를 함께 보고한다.
+
+    다만 판정은 계속 RMS 로 한다. 이상치 anchor 는 학습 데이터에 남으면
+    라벨이 실제로 오염되므로, 관용 통계로 가려서 통과시키는 것이 아니라
+    anchor 필터(--anchor-rho-tol)가 제거해야 한다. RMS 가 높게 남아 있다는 것은
+    "제거되지 않은 오염 anchor 가 있다"는 정확한 신호다.
     """
     m0 = data["lam"] == 0.0
     C, Y, Z = data["C"], data["Y"], data["Z"].astype(int)
@@ -474,17 +489,35 @@ def rho_drift_effect(data, sg, per_axis=None):
         if s0.sum() == 0 or s1.sum() == 0:
             continue
 
-        def rms(sel):
+        def dev(sel):
             base = np.array([sg.rho_worst(k, c) for c in C[sel]])
             moved = np.array([sg.rho_worst(k, c + y)
                               for c, y in zip(C[sel], Y[sel])])
-            return float(np.sqrt(((moved - base) ** 2).mean()))
-        out[k] = (rms(s0), rms(s1), int(s0.sum()), int(s1.sum()))
+            return np.abs(moved - base)
+        d0, d1 = dev(s0), dev(s1)
+        rms0 = float(np.sqrt((d0 ** 2).mean()))
+        rms1 = float(np.sqrt((d1 ** 2).mean()))
+        # 이상치 기준은 anchor 필터의 문턱 그 자체로 잡는다. 그 값을 넘는 행은
+        # 정의상 "필터가 제거해야 했는데 남아 있는 행"이므로, 개수와 '그것들을
+        # 뺐을 때의 RMS' 를 함께 주면 바로 실행 가능한 진단이 된다.
+        # (중앙값의 배수로 잡으면 중앙값이 0 에 붙는 이 데이터에서 무의미하다.)
+        keep = d0 <= out_thr
+        rms0_clean = (float(np.sqrt((d0[keep] ** 2).mean()))
+                      if keep.any() else 0.0)
+        out[k] = dict(
+            drift=rms0, effect=rms1, ratio=rms0 / max(rms1, 1e-12),
+            n0=int(s0.sum()), n1=int(s1.sum()),
+            d_med=float(np.median(d0)), d_p95=float(np.percentile(d0, 95)),
+            d_max=float(d0.max()),
+            out_thr=float(out_thr),
+            n_out=int((~keep).sum()), frac_out=float((~keep).mean()),
+            drift_clean=rms0_clean,
+            ratio_clean=rms0_clean / max(rms1, 1e-12))
     return out
 
 
 def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None,
-            rho_tol=0.3):
+            rho_tol=0.3, anchor_rho_tol_hint="--anchor-rho-tol"):
     """G6: 분기·리플레이가 믿을 만한가.
 
     판정 기준은 **ρ_worst 공간의 phase 별 비율**이다 (sg 를 주면):
@@ -552,7 +585,7 @@ def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None,
     if not per:
         log("[G6] FAIL: phase 별 ρ 비율을 잴 수 있는 행이 없음")
         return False, ratio
-    rr = {k: (d / max(e, 1e-12)) for k, (d, e, _, _) in per.items()}
+    rr = {k: per[k]["ratio"] for k in per}
     worst_k = max(rr, key=lambda k: rr[k])
     ok = all(v <= rho_tol for v in rr.values()) and drop_ok
     log(f"[G6] {'PASS' if ok else 'FAIL'}: ρ_worst 공간 drift/effect "
@@ -561,11 +594,21 @@ def gate_g6(data, tol_ratio=0.3, max_anchor_drop=0.5, log=print, sg=None,
         f"anchor drop {drop:.0%} {'<=' if drop_ok else '>'} "
         f"{max_anchor_drop:.0%}")
     for k in sorted(per):
-        d, e, n0, n1 = per[k]
+        s = per[k]
         mark = "  <-- 이 phase 데이터는 못 쓴다" if rr[k] > rho_tol else ""
-        log(f"     phase {k} [{sg.labels[k]:<5}] drift_ρ={d:.4f} "
-            f"effect_ρ={e:.4f} ratio={rr[k]:.3f} "
-            f"(λ=0 {n0}행 / λ>0 {n1}행){mark}")
+        log(f"     phase {k} [{sg.labels[k]:<5}] drift_ρ={s['drift']:.4f} "
+            f"effect_ρ={s['effect']:.4f} ratio={rr[k]:.3f} "
+            f"(λ=0 {s['n0']}행 / λ>0 {s['n1']}행){mark}")
+        # 분포. RMS 가 소수 이상치에 지배되는지 여기서 바로 보인다.
+        log(f"           drift 분포: 중앙 {s['d_med']:.5f}  95% "
+            f"{s['d_p95']:.4f}  최대 {s['d_max']:.4f}")
+        log(f"           > {s['out_thr']:g} 인 행 {s['n_out']}개 "
+            f"({s['frac_out']:.2%}) 제외 시 drift_ρ={s['drift_clean']:.5f} "
+            f"ratio={s['ratio_clean']:.3f}")
+        if rr[k] > rho_tol and s["ratio_clean"] <= rho_tol:
+            log(f"           → 소수 오염 anchor 가 RMS 를 지배한다. 그 행들을 "
+                f"빼면 통과한다. --anchor-rho-tol 을 {s['out_thr']:g} 아래로 "
+                f"낮춰 수집 단계에서 제거하라 (현재 {anchor_rho_tol_hint})")
     log("     [진단] raw feature 비율 (분모가 δ 무관 방향까지 포함해 희석됨): "
         + ", ".join(f"{fs.NAMES[k]}={ratio[k]:.3f}"
                     for k in range(fs.N_FEATURES)
@@ -994,7 +1037,8 @@ def cmd_collect(args):
         if env is not None:
             env.close()
     ok, ratio = gate_g6(data, tol_ratio=args.g6_tol, sg=sg,
-                        rho_tol=args.g6_rho_tol)
+                        rho_tol=args.g6_rho_tol,
+                        anchor_rho_tol_hint=args.anchor_rho_tol)
     os.makedirs(args.out_dir, exist_ok=True)
     save_dataset(os.path.join(args.out_dir, "fcm_dataset.hdf5"), data)
     viz_g6(data, ratio, os.path.join(args.out_dir, "fcm_g6_residual.png"))
@@ -1012,7 +1056,8 @@ def cmd_train(args, data=None):
     except Exception:
         sg = None
     ok, _ = gate_g6(data, tol_ratio=args.g6_tol, sg=sg,
-                    rho_tol=args.g6_rho_tol)
+                    rho_tol=args.g6_rho_tol,
+                    anchor_rho_tol_hint=getattr(args, "anchor_rho_tol", None))
     if not ok and not args.no_gate:
         raise SystemExit("[G6] FAIL — 학습 중단")
     # holdout: 시간 순 20% (무작위 셔플은 같은 rollout 의 h 행이 양쪽에 새는
@@ -1410,7 +1455,7 @@ def run_selftest():
         ok = False
         print(f"[FAIL] ρ 공간 판정 phase {sorted(per)} != 데이터의 {sorted(zs)}")
     else:
-        rr = {k: per[k][0] / max(per[k][1], 1e-12) for k in per}
+        rr = {k: per[k]["ratio"] for k in per}
         print(f"ρ 공간 판정 phase {sorted(per)} (Z 전부 커버), ratio = "
               + ", ".join(f"p{k}:{v:.3f}" for k, v in sorted(rr.items())))
         # mock 은 리플레이 오차가 없으므로 drift_ρ ≈ 0 이어야 한다
