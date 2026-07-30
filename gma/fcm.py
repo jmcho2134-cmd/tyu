@@ -683,6 +683,13 @@ class FCM:
         return self
 
     def predict(self, C, A, D, h, O, Z, g=None):
+        # goal 로 학습한 모델에 goal 없이 추론하면 3열이 조용히 0 이 되어 학습
+        # 분포와 어긋난다 — 조용한 정확도 손실이라 발견이 어렵다. 막는다.
+        if getattr(self, "has_goal", False) and g is None and self.goal is None:
+            raise ValueError(
+                "이 FCM 은 goal 열을 실제 값으로 학습했다. predict 에 g= 를 "
+                "넘겨라 (넘기지 않으면 goal 3열이 0 으로 채워져 학습 분포와 "
+                "어긋난다). 구 pkl 은 has_goal=False 이므로 영향 없다.")
         X = self._x(C, A, D, h, O, Z, g=g)
         return self.ys.inverse_transform(self.net.predict(self.xs.transform(X)))
 
@@ -1469,8 +1476,18 @@ def run_selftest():
 
     ens = FCMEnsemble(n=3, hidden=(48,), max_iter=400)
     ens.fit(data, log=lambda *a: None)
+    if not ens.has_goal:
+        ok = False; print("[FAIL] G 열이 있는데 has_goal 이 False")
+    # goal 로 학습한 모델에 goal 없이 추론하면 막혀야 한다 (조용한 분포 불일치)
+    try:
+        ens.predict(data["C"][:4], data["A"][:4], data["D"][:4],
+                    data["h"][:4], data["O"][:4], data["Z"][:4])
+        ok = False
+        print("[FAIL] goal 학습 모델이 g 없는 추론을 허용했다")
+    except ValueError:
+        print("goal 학습 모델 + g 누락 -> ValueError (조용한 0 채움 차단)")
     mu, sd = ens.predict(data["C"], data["A"], data["D"], data["h"],
-                         data["O"], data["Z"])
+                         data["O"], data["Z"], g=data["G"])
     r2 = r2_per_feature(data["Y"], mu)
     j = fs.index_of("eef_object_dist")
     print(f"train R² eef_object_dist={r2[j]:+.2f}, "
@@ -1488,9 +1505,10 @@ def run_selftest():
 
     class S:
         sat_frac, cos_max, rand_dirs, top_k, refine_steps = 0.5, 0.95, 4, 3, 2
+    g_anchor = np.tile(np.asarray(roller.goal, float), (len(anchors), 1))
     picked, scored = screen_phase(scr, 0, phi, act, obs,
                                   roller.actions[:40], rng, S,
-                                  log=lambda *a: None)
+                                  log=lambda *a: None, goal=g_anchor)
     best = picked[0]
     cos_x = float(best["d"][0])
     print(f"phase0 best dir={np.round(best['d'], 2)} (want +x heavy), "
@@ -1512,7 +1530,7 @@ def run_selftest():
     class S2(S):
         min_score = 1e6
     p2, _ = screen_phase(scr, 0, phi, act, obs, roller.actions[:40], rng, S2,
-                         log=lambda *a: None)
+                         log=lambda *a: None, goal=g_anchor)
     if p2:
         ok = False; print(f"[FAIL] min_score=1e6 인데 {len(p2)}개 통과")
 
