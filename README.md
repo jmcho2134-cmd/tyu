@@ -55,3 +55,96 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\fcm.py screen
 [out] ./artifacts\action_sets.json
 [plot] ./artifacts\fcm_sets.png
 [env] PickPlaceBread / ['UR5e']
+
+
+
+
+PS C:\Users\Administrator\Desktop\tyu-main\gma> python -c "import json;d=json.load(open('artifacts/g7_diag.json'));print(json.dumps(d,indent=1,ensure_ascii=False))"
+{
+ "g7_pass": true,
+ "mean_recall": 0.583,
+ "mean_random": 0.4,
+ "phases": {
+  "phase_0": {
+   "recall": 0.5,
+   "random": 0.4,
+   "n_pool": 10,
+   "n_shipped": 2,
+   "k_eff": 4,
+   "measured_drho_worst": {
+    "rand2": -0.0279,
+    "axis[dz+]": -0.0537,
+    "rand3": -0.0207,
+    "rand1": -0.0321,
+    "axis[dy+]": -0.0464,
+    "axis[dry+]": -0.0682,
+    "rand5": 0.0274,
+    "rand4": -0.027,
+    "axis[drz+]": -0.0023,
+    "axis[dx+]": 0.0214
+   },
+   "shipped": [
+    "axis[dz+]",
+    "rand2"
+   ]
+  },
+  "phase_1": {
+   "recall": 0.5,
+   "random": 0.4,
+   "n_pool": 10,
+   "n_shipped": 4,
+   "k_eff": 4,
+   "measured_drho_worst": {
+    "axis[grip-]": 0.0002,
+    "rand2": 0.0131,
+    "steepest": -0.1105,
+    "axis[dz+]": -0.1128,
+    "rand0": -0.1168,
+    "rand1": 0.027,
+    "rand3": -0.026,
+    "rand5": -0.0315,
+    "axis[drx+]": 0.0148,
+    "axis[dry+]": -0.0177
+   },
+   "shipped": [
+    "axis[dz+]",
+    "axis[grip-]",
+    "rand2",
+    "steepest"
+   ]
+  },
+  "phase_2": {
+   "recall": 0.75,
+   "random": 0.4,
+   "n_pool": 10,
+   "n_shipped": 4,
+   "k_eff": 4,
+   "measured_drho_worst": {
+    "rand1": -2.0897,
+    "axis[dz+]": -1.3876,
+    "rand4": -1.433,
+    "antipara": -0.0814,
+    "axis[grip+]": -0.4276,
+    "rand0": -0.156,
+    "rand5": -0.0836,
+    "axis[drx+]": -0.1972,
+    "axis[drz+]": 0.0412,
+    "axis[dry+]": -0.3186
+   },
+   "shipped": [
+    "antipara",
+    "axis[dz+]",
+    "rand1",
+    "rand4"
+   ]
+  }
+ }
+}
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+[warn] feature_select: torque/qvel missing -> energy column is identically 0. Torque is NOT recoverable by state replay; record it during collection or fall back to frame_extract.inverse_dynamics_torque().
+  phase 0: recall = 0.50 (random 0.40; pool 10, 출하 2개)
+  phase 1: recall = 0.50 (random 0.40; pool 10, 출하 4개)
+  phase 2: recall = 0.75 (random 0.40; pool 10, 출하 4개)
+[G7] PASS: mean recall 0.58 vs random 0.40
+[out] ./artifacts\g7_diag.json
