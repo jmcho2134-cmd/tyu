@@ -1,3 +1,30 @@
+PS C:\Users\Administrator\Desktop\tyu-main\gma> python fcm.py screen --no-g7
+  phase 0 [pre]
+    cone blocked: grip-
+    axis[dry+]       drho=-0.046  unc=0.034  score=+0.012
+    rand1            drho=-0.035  unc=0.028  score=+0.008
+    (score <= 0 로 제외 13개)
+    [warn] phase 0: 후보 2/4 개만 기준 통과 — 열화 방향이 부족하다 (FCM 재학습/λ_probe 상향 검토)
+  phase 1 [move]
+    cone blocked: grip+
+    axis[grip-]      drho=-1.119  unc=0.468  score=+0.651
+    axis[dz+]        drho=-0.413  unc=0.271  score=+0.142
+    (score <= 0 로 제외 12개)
+    [warn] phase 1: 후보 2/4 개만 기준 통과 — 열화 방향이 부족하다 (FCM 재학습/λ_probe 상향 검토)
+  phase 2 [post]
+    cone blocked: grip-
+    rand1            drho=-0.844  unc=0.300  score=+0.544
+    axis[dz+]        drho=-0.572  unc=0.166  score=+0.406
+    rand4            drho=-0.488  unc=0.186  score=+0.302
+    antipara         drho=-0.188  unc=0.085  score=+0.103
+[out] ./artifacts\action_sets.json
+[plot] ./artifacts\fcm_sets.png
+[G7] 건너뜀 (--no-g7). 문서 G7 은 미판정 상태로 남는다.
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+
+
+
 PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\subgoal_discover.py
 [discover] 20 demos, canonical = pre | move | post
   phase 0 [pre      ] d_start=9.3221   contact eq 1*, eef_object_dist le 0.01809*
