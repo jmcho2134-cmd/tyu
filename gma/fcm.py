@@ -1181,7 +1181,7 @@ def cmd_screen(args, ens=None):
 
 
 def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None,
-            apply_filter=True, sets_path=None):
+            apply_filter=True, sets_path=None, reuse=None):
     """Top-K recall > random: FCM 랭킹 상위권이 실측(분기 rollout) 상위권과
     겹치는가. 실측 Δρ = 같은 anchor 에서 λ_probe·d 를 실제로 밀어본 결과.
 
@@ -1201,7 +1201,14 @@ def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None,
     recall 이 목적함수 불일치를 재게 된다.
     """
     entries, boundaries, sg = pipeline
-    rollers, env = build_rollers(entries, warmup=args.warmup)
+    # reuse: 이전 실행의 g7_diag.json. 후보는 seed 고정으로 결정론적으로 다시
+    # 생성되므로 이름으로 실측값을 물려받을 수 있다. robosuite 없이 필터만 다시
+    # 적용할 때 쓴다 (재측정이 이 게이트의 거의 전부의 시간이다).
+    rollers, env = (({}, None) if reuse else
+                    build_rollers(entries, warmup=args.warmup))
+    if reuse:
+        log(f"[G7] 실측 재사용 모드: 시뮬레이터를 돌리지 않고 "
+            f"{len(reuse.get('phases', {}))} phase 의 저장된 측정값을 쓴다")
     rng = np.random.default_rng(args.seed + 2)
     recalls, randoms, diag = [], [], {}
     try:
@@ -1211,32 +1218,45 @@ def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None,
                 log(f"  phase {phase}: pool {len(pool)} < top_k+2 — SKIP")
                 continue
             shipped = {c["name"] for c in sets.get(f"phase_{phase}", [])}
-            # Branch A(리플레이) 기준으로 실측 — 학습 라벨과 같은 기준선
-            baseA = {}
-            for did, roller in list(rollers.items())[:args.g7_demos]:
-                T = roller.T
-                zseg = z_from_bounds(boundaries[did]["bounds"], T)
-                for t in phase_anchors(zseg, phase, args.g7_anchors, T,
-                                       args.horizon):
-                    outA, _ = roller.branch(t, np.zeros(roller.adim),
-                                            args.horizon)
-                    if outA is not None:
-                        baseA[(did, t)] = outA
-            meas = []
-            for r in pool:
-                drs = []
-                for (did, t), outA in baseA.items():
-                    roller = rollers[did]
-                    out, info = roller.branch(
-                        t, args.lam_probe * np.asarray(r["d"]), args.horizon)
-                    if out is None:
-                        continue
-                    phi_t = roller.phi_at(t)
-                    r_end = sg.rho_worst(phase, phi_t + (out[-1] - outA[-1]))
-                    r_ref = sg.rho_worst(phase, phi_t)
-                    drs.append(r_end - r_ref)
-                meas.append(float(np.mean(drs)) if drs else np.nan)
-            meas = np.asarray(meas)
+            if reuse:
+                stored = (reuse.get("phases", {})
+                          .get(f"phase_{phase}", {})
+                          .get("measured_drho_worst", {}))
+                meas = np.array([stored.get(r["name"], np.nan) for r in pool],
+                                float)
+                miss = [r["name"] for r in pool if r["name"] not in stored]
+                if miss:
+                    log(f"  phase {phase}: 저장된 측정값 없는 후보 "
+                        f"{len(miss)}개 제외 — {', '.join(miss[:5])}")
+            else:
+                # Branch A(리플레이) 기준으로 실측 — 학습 라벨과 같은 기준선
+                baseA = {}
+                for did, roller in list(rollers.items())[:args.g7_demos]:
+                    T = roller.T
+                    zseg = z_from_bounds(boundaries[did]["bounds"], T)
+                    for t in phase_anchors(zseg, phase, args.g7_anchors, T,
+                                           args.horizon):
+                        outA, _ = roller.branch(t, np.zeros(roller.adim),
+                                                args.horizon)
+                        if outA is not None:
+                            baseA[(did, t)] = outA
+                meas = []
+                for r in pool:
+                    drs = []
+                    for (did, t), outA in baseA.items():
+                        roller = rollers[did]
+                        out, info = roller.branch(
+                            t, args.lam_probe * np.asarray(r["d"]),
+                            args.horizon)
+                        if out is None:
+                            continue
+                        phi_t = roller.phi_at(t)
+                        r_end = sg.rho_worst(phase,
+                                             phi_t + (out[-1] - outA[-1]))
+                        r_ref = sg.rho_worst(phase, phi_t)
+                        drs.append(r_end - r_ref)
+                    meas.append(float(np.mean(drs)) if drs else np.nan)
+                meas = np.asarray(meas)
             okm = np.isfinite(meas)
             if okm.sum() < args.top_k + 2:
                 log(f"  phase {phase}: 측정 성공 {int(okm.sum())} < top_k+2 — SKIP")
@@ -1717,6 +1737,12 @@ def add_args(ap):
     # G7
     ap.add_argument("--no-g7", action="store_true",
                     help="screen 후 G7 실측 검증 생략 (robosuite 불필요)")
+    ap.add_argument("--g7-reuse", nargs="?", const="-", default=None,
+                    metavar="PATH",
+                    help="G7 실측을 다시 하지 않고 기존 g7_diag.json 의 측정값을 "
+                         "재사용한다 (robosuite 불필요). 후보는 seed 고정으로 "
+                         "결정론적으로 재생성되므로 이름으로 물려받는다. "
+                         "인자 없이 주면 --out-dir/g7_diag.json")
     ap.add_argument("--no-g7-filter", action="store_true",
                     help="G7 을 수동 검사로만 쓰고 action_sets.json 을 실측으로 "
                          "덮어쓰지 않는다 (ablation 용)")
@@ -1752,10 +1778,18 @@ def main():
         if args.no_g7:
             print("[G7] 건너뜀 (--no-g7). 문서 G7 은 미판정 상태로 남는다.")
         else:
+            reuse = None
+            if args.g7_reuse:
+                p = (args.g7_reuse if args.g7_reuse != "-" else
+                     os.path.join(args.out_dir, "g7_diag.json"))
+                with open(p) as f:
+                    reuse = json.load(f)
+                print(f"[G7] 저장된 실측 재사용: {p}")
             gate_g7(args, sets, scored, pipeline,
                     out_path=os.path.join(args.out_dir, "g7_diag.json"),
                     apply_filter=not args.no_g7_filter,
-                    sets_path=os.path.join(args.out_dir, "action_sets.json"))
+                    sets_path=os.path.join(args.out_dir, "action_sets.json"),
+                    reuse=reuse)
 
 
 if __name__ == "__main__":
