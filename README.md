@@ -76,3 +76,41 @@ PS C:\Users\Administrator\Desktop\tyu-main\gma> python .\verify_subgoal.py
 
 [verify] G4 PASS / G5 PASS
 PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+
+
+
+[warn] feature_select: torque/qvel missing -> energy column is identically 0. Torque is NOT recoverable by state replay; record it during collection or fall back to frame_extract.inverse_dynamics_torque().
+  demo_000: rows so far 1600
+  demo_001: rows so far 3336
+  demo_002: rows so far 4976
+  demo_003: rows so far 6600
+  demo_004: rows so far 8304
+  demo_005: rows so far 9768
+  demo_006: rows so far 11464
+  demo_007: rows so far 13000
+  demo_008: rows so far 14640
+  demo_009: rows so far 16240
+  demo_010: rows so far 17840
+  demo_011: rows so far 19592
+  demo_012: rows so far 21384
+  demo_013: rows so far 23144
+  demo_014: rows so far 24944
+  demo_015: rows so far 26728
+  demo_016: rows so far 28544
+  demo_017: rows so far 30280
+  demo_018: rows so far 31888
+  demo_019: rows so far 33624
+[collect] 33624 rows (606 branches dropped; anchors kept 229/240)
+[G6] FAIL: λ=0 drift/effect (subgoal 조건 채널) 최대 0.627 (gripper_open) > 0.3, anchor drop 5% <= 50%
+     판정 대상: eef_object_dist=0.076, object_goal_dist=0.030, gripper_open=0.627, contact=0.505
+[plot] ./artifacts\fcm_g6_residual.png
+[out] ./artifacts\fcm_dataset.hdf5
+[G6] FAIL — 분기/리플레이 수정 전 학습 금지
+PS C:\Users\Administrator\Desktop\tyu-main\gma> 
+
+
+
+
+
+
