@@ -1170,14 +1170,27 @@ def cmd_screen(args, ens=None):
     path = os.path.join(args.out_dir, "action_sets.json")
     with open(path, "w") as f:
         json.dump(sets, f, indent=2)
-    print(f"[out] {path}")
+    # 예측 기준 집합을 따로 보존한다. G7 이 action_sets.json 을 실측 기준으로
+    # 덮어쓰므로, Ablation("예측만" vs "예측+실측 검증")에 이 파일이 필요하다.
+    pred = os.path.join(args.out_dir, "action_sets_predicted.json")
+    with open(pred, "w") as f:
+        json.dump(sets, f, indent=2)
+    print(f"[out] {path}  (예측 기준 사본: {pred})")
     viz_sets(sets, os.path.join(args.out_dir, "fcm_sets.png"), sg)
     return sets, all_scored, (entries, boundaries, sg)
 
 
-def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None):
+def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None,
+            apply_filter=True, sets_path=None):
     """Top-K recall > random: FCM 랭킹 상위권이 실측(분기 rollout) 상위권과
     겹치는가. 실측 Δρ = 같은 anchor 에서 λ_probe·d 를 실제로 밀어본 결과.
+
+    apply_filter=True (기본) 면 여기서 action_sets.json 을 **실측으로 다시
+    쓴다**: 실측 Δρ_worst ≥ −min_measured 인 후보를 버리고 남은 것을 실측 순으로
+    재랭킹한다. recall 만 보고하는 수동 검사로 두면, 예측이 1위로 꼽았지만
+    실제로는 아무 일도 하지 않는 방향("유령")이 그대로 Stage 8 로 넘어간다.
+    실측으로 잡은 사례가 정확히 그것이었다 — 아래 유령 검출 주석 참조.
+    예측 기준 집합은 action_sets_predicted.json 에 남겨 ablation 에 쓴다.
 
     검증 대상은 action_sets.json 에 실제로 실린 방향(picked)이다. 이전 구현은
     fcm_top = range(top_k), 즉 scored[:top_k] 를 FCM 의 Top-K 로 봤는데, 출하되는
@@ -1241,15 +1254,78 @@ def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None):
             rec = len(true_top & fcm_top) / max(1, len(fcm_top))
             rnd = k_eff / int(okm.sum())
             recalls.append(rec); randoms.append(rnd)
+
+            # ---- 유령 후보 검출 -------------------------------------------
+            # FCM 이 강하게 열화를 예측했는데 실측이 0 근방인 후보. 실측 사례:
+            # phase 1 의 axis[grip−] 가 예측 −1.290 (1위, 2위의 5배) 인데
+            # 실측 +0.0002 였다. 원인은 그리퍼의 sign 적분기다 —
+            # format_action 이 ca += 0.2·sign(a) 로 적분하므로, 데모가 grip 을
+            # +1 로 유지하는 move phase 에서 λ_probe=1.0 의 grip− 는 명령을
+            # 정확히 0 으로 만들고 sign(0)=0 이라 그리퍼가 그냥 멈춘다. 학습
+            # 데이터에는 |δ|=1.2 짜리가 있어 명령이 음수로 넘어가 물체가
+            # 떨어진 사례가 있었고, 매끄러운 MLP 가 그 사이의 불연속을
+            # 표현하지 못해 외삽했다. 예측만으로는 절대 잡을 수 없는 종류다.
+            ghosts = [pool[i]["name"] for i in idx_ok
+                      if pool[i]["drho"] < -args.ghost_pred
+                      and meas[i] > -args.ghost_meas]
+
+            # ---- G7 을 능동 필터로: 실측으로 재랭킹 ------------------------
+            # 실측이 열화를 보이지 않는(≥ 0) 후보는 Stage 8 로 보내지 않는다.
+            # 유령 방향으로 λ 사다리를 만들면 rung 이 전부 같은 궤적이 되고,
+            # G8 은 그것을 "사다리 무반응"으로 기각한다 — 그때는 이미 Stage 8
+            # 롤아웃을 다 쓴 뒤다. 여기서 걸러내는 것이 훨씬 싸다.
+            prev = {c["name"]: c for c in sets.get(f"phase_{phase}", [])}
+            keep = [i for i in idx_ok if meas[i] < -args.min_measured]
+            keep.sort(key=lambda i: float(meas[i]))       # 가장 음수 우선
+            picked_f, out_f = [], []
+            for i in keep:
+                d = np.asarray(pool[i]["d"], float)
+                if any(abs(float(np.dot(d, p))) > args.cos_max
+                       for p in picked_f):
+                    continue
+                picked_f.append(d)
+                base = prev.get(pool[i]["name"], {})
+                out_f.append(dict(
+                    candidate_id=f"p{phase}_c{len(out_f):03d}",
+                    name=pool[i]["name"],
+                    direction=[round(float(x), 6) for x in d],
+                    subspace=subspace_of(d),
+                    # inject_mode="top1" 은 창을 쓰지 않는다. screening 이 계산해
+                    # 둔 값이 있으면 물려주고, 없으면 phase 전체로 둔다.
+                    start_fraction=base.get("start_fraction", 0.0),
+                    duration_fraction=base.get("duration_fraction", 1.0),
+                    predicted_drho=round(float(pool[i]["drho"]), 4),
+                    uncertainty=round(float(pool[i]["unc"]), 4),
+                    screening_score=round(float(pool[i]["score"]), 4),
+                    measured_drho_worst=round(float(meas[i]), 4)))
+                if len(out_f) >= args.top_k:
+                    break
+            if apply_filter:
+                sets[f"phase_{phase}"] = out_f
+
             diag[f"phase_{phase}"] = dict(
                 recall=round(rec, 3), random=round(rnd, 3),
                 n_pool=int(okm.sum()), n_shipped=len(fcm_top), k_eff=k_eff,
                 measured_drho_worst={pool[i]["name"]: round(float(meas[i]), 4)
                                      for i in idx_ok},
-                shipped=sorted(shipped))
+                shipped_predicted=sorted(shipped),
+                shipped_measured=[c["name"] for c in out_f],
+                ghosts=ghosts, filter_applied=bool(apply_filter))
             log(f"  phase {phase}: recall = {rec:.2f} "
                 f"(random {rnd:.2f}; pool {int(okm.sum())}, "
                 f"출하 {len(fcm_top)}개)")
+            if ghosts:
+                log(f"     [유령] 예측 강함 / 실측 0 근방 — 제외: "
+                    + ", ".join(f"{n}(예측 "
+                                f"{next(p['drho'] for p in pool if p['name'] == n):+.3f}"
+                                f" → 실측 "
+                                f"{meas[[p['name'] for p in pool].index(n)]:+.4f})"
+                                for n in ghosts))
+            if apply_filter:
+                log(f"     실측 재랭킹 → {[c['name'] for c in out_f]}")
+                if not out_f:
+                    log(f"     [warn] phase {phase}: 실측으로 열화가 확인된 "
+                        f"방향이 없다. 이 phase 는 Stage 8 에서 빠진다")
     finally:
         if env is not None:
             env.close()
@@ -1263,6 +1339,12 @@ def gate_g7(args, sets, all_scored, pipeline, log=print, out_path=None):
     ok = float(np.mean(recalls)) > float(np.mean(randoms))
     log(f"[G7] {'PASS' if ok else 'FAIL'}: mean recall {np.mean(recalls):.2f} "
         f"vs random {np.mean(randoms):.2f}")
+    if apply_filter and sets_path:
+        with open(sets_path, "w") as f:
+            json.dump(sets, f, indent=2)
+        n = {k: len(v) for k, v in sorted(sets.items())}
+        log(f"[G7] action_sets.json 을 실측 기준으로 재작성: {n}")
+        log(f"     (예측 기준 집합은 action_sets_predicted.json 에 보존)")
     if out_path:
         with open(out_path, "w") as f:
             json.dump(dict(g7_pass=bool(ok),
@@ -1635,6 +1717,16 @@ def add_args(ap):
     # G7
     ap.add_argument("--no-g7", action="store_true",
                     help="screen 후 G7 실측 검증 생략 (robosuite 불필요)")
+    ap.add_argument("--no-g7-filter", action="store_true",
+                    help="G7 을 수동 검사로만 쓰고 action_sets.json 을 실측으로 "
+                         "덮어쓰지 않는다 (ablation 용)")
+    ap.add_argument("--min-measured", type=float, default=0.0,
+                    help="실측 Δρ_worst 가 이 값보다 더 음수여야 출하한다. "
+                         "0 이면 '실측으로 열화가 확인된' 방향만")
+    ap.add_argument("--ghost-pred", type=float, default=0.3,
+                    help="유령 검출: 예측 Δρ̂ 가 이보다 강한데")
+    ap.add_argument("--ghost-meas", type=float, default=0.05,
+                    help="유령 검출: 실측이 이 안쪽이면 유령으로 보고")
     ap.add_argument("--g7-pool", type=int, default=10)
     ap.add_argument("--g7-anchors", type=int, default=2)
     ap.add_argument("--g7-demos", type=int, default=2)
@@ -1661,7 +1753,9 @@ def main():
             print("[G7] 건너뜀 (--no-g7). 문서 G7 은 미판정 상태로 남는다.")
         else:
             gate_g7(args, sets, scored, pipeline,
-                    out_path=os.path.join(args.out_dir, "g7_diag.json"))
+                    out_path=os.path.join(args.out_dir, "g7_diag.json"),
+                    apply_filter=not args.no_g7_filter,
+                    sets_path=os.path.join(args.out_dir, "action_sets.json"))
 
 
 if __name__ == "__main__":
