@@ -144,7 +144,11 @@ def rho_endpoint(sg, phase, traj, zseg):
     idx = np.where(zz == phase)[0]
     i = int(idx[-1]) if len(idx) else len(traj["F"]) - 1
     i = min(i, len(traj["F"]) - 1)
-    return float(sg.rho_raw(phase, traj["F"][i]))
+    # rho_worst: Stage 7 screening 이 방향을 고른 눈금과 같은 눈금으로 잰다.
+    # rho_raw(RMS·전역 d_start)로 재면 "방향을 고른 기준"과 "사다리를 재는
+    # 기준"이 달라, screening 이 강하다고 본 방향이 사다리에서 평평하게 보이는
+    # 인공적 불일치가 생긴다 (조건별 정규화 유무의 차이).
+    return float(sg.rho_worst(phase, traj["F"][i]))
 
 
 # ===========================================================================
