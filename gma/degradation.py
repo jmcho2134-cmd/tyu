@@ -5,18 +5,24 @@ degradation.py — Stage 8: 열화 궤적 생성 (SSRR 골격, PIPELINE_v4)
 
 정책은 BC 가 아니라 데모추종 closed-loop 트래커다 (D6, rollout_exec 헤더 참조):
 λ=0 이면 데모를 그대로 재현하고, 상태가 밀리면 되돌아온다. 그 정책의 action 에
-Stage 7 이 찾아낸 "phase 의 subgoal 방해 성분 집합" 을 주입한다 (inject_mode
-="set", 기본):
+Stage 7 이 찾아낸 "phase 의 subgoal 방해 방향 집합"을 주입한다.
 
-    W(z)   = top-k 후보 방향의 성분별 합 → max|·| 정규화 → |w_j|<θ_w 제거
-    seq[k] = Σ_j 1[U<p]·U(0.5,1.5)·w_j·e_j     (phase 스텝마다 독립 샘플)
-    a'_t   = fit_to_box( a_demo(k) + feedback + λ·seq[k] )
+기본 모드 "burst" (sidetrack 주입 — suboptimal 데모의 모양):
 
-즉 FCM 은 "어느 성분이 subgoal 을 방해하는가"(집합+부호)만 주고, 스텝마다
-어떤 성분이 얼마나 들어갈지는 랜덤이다 — step1 (+dx,0,+dz,0), step2
-(0,0,+dz,2·drx) 처럼. seed 는 family 고정이라 rung 간에는 같은 패턴에 λ 만
-커진다 (nested ladder). "random"(방향 1개 + 스텝 Bernoulli), "window"(Stage 7
-창 결정적)는 ablation 용으로 남겨둔다.
+    phase 를 k∈[2,4] 슬롯으로 등분, 슬롯마다 excursion 버스트 1개
+    버스트 = 집합에서 랜덤으로 뽑은 방향 1개 × U(0.7,1.3) × half-sine 엔벨로프
+    버스트 사이는 깨끗 → 트래커가 데모 경로로 복귀
+    a'_t = fit_to_box( a_demo(k) + feedback + λ·seq[k] )
+
+즉 궤적은 데모를 따라가다 랜덤한 시점에 방해 방향으로 이탈했다 돌아오기를
+반복한다 — 상수 바이어스("top1")가 만드는 '평행 이동 드리프트'와 이것이
+사용자 관찰로 갈린 지점이다. seed 는 family 고정이라 rung 간에는 같은 버스트
+패턴에 λ(진폭)만 커진다 (nested ladder). "top1"(후보별 상수 바이어스),
+"set"(성분 합산+Bernoulli), "random", "window" 는 ablation 용으로 남겨둔다.
+
+주의(라벨): excursion 은 복귀하므로 phase 끝점이 깨끗하다 — success·goal_err·
+ρ_end 로는 우회가 안 보인다. Stage 9 의 damage 가 경로 항(Δpath/path0)을
+포함하는 이유다 (preference.damage_of 참조).
 
 λ 램프 (문서 그대로):
     bracketing   λ 를 2배씩 키우며 task 실패가 처음 나오는 구간을 잡고
@@ -57,7 +63,8 @@ class FamilyRunner:
 
     def __init__(self, make_stepper, demo_eef, demo_actions, zseg, goal,
                  obj0_z, dt, *, kp=0.8, pos_scale=0.01, max_stretch=1.5,
-                 inject_mode="set", p_inject=0.5):
+                 inject_mode="set", p_inject=0.5, n_bursts=(2, 4),
+                 burst_frac=0.12):
         self.mk = make_stepper
         self.demo_eef = np.asarray(demo_eef, float)
         self.actions = np.asarray(demo_actions, float)
@@ -75,6 +82,8 @@ class FamilyRunner:
         # 고정하므로 "같은 패턴, 커지는 λ" nested-ladder 성질은 공통이다.
         self.inject_mode = inject_mode
         self.p_inject = float(p_inject)
+        self.n_bursts = tuple(n_bursts)
+        self.burst_frac = float(burst_frac)
 
     def _phase_span(self, phase):
         T = len(self.actions)
@@ -93,6 +102,45 @@ class FamilyRunner:
         on = rng.random((b - a, len(comp))) < self.p_inject
         sc = rng.uniform(0.5, 1.5, (b - a, len(comp)))
         seq[a:b, comp] = on * sc * w[comp]
+        return seq
+
+    def seq_burst(self, phase, dirs, seed):
+        """excursion 버스트: 방해 방향 '집합'에서 버스트마다 하나를 뽑아
+        연속 주입하고, 사이 구간은 깨끗하게 둔다 (트래커가 데모로 복귀).
+
+        상수 바이어스(top1)와의 차이가 곧 궤적 모양의 차이다:
+          top1  : 매 스텝 같은 방향 → 상수 속도 오프셋 → 데모의 '평행 이동'
+                  (실측: 3D 플롯이 드리프트로 보인다는 관찰이 이것)
+          burst : 랜덤 시점의 짧은 이탈 + 복귀 → 데모를 따라가다 지그재그로
+                  벗어났다 돌아오는 suboptimal 데모의 모양 (sidetrack 주입)
+
+        구조 (seed 고정 → rung 간 같은 패턴, λ 는 진폭만 키움 = nested ladder):
+          phase 를 k 슬롯으로 등분해 슬롯마다 버스트 1개 (경로 전체에 분산)
+          버스트마다 방향 = dirs 중 랜덤 1개, 진폭 = U(0.7, 1.3)
+          엔벨로프 = half-sine (스텝 함수가 아니라 부드러운 이탈-복귀)
+        """
+        a, b = self._phase_span(phase)
+        seq = np.zeros((len(self.actions), self.adim))
+        n_ph = b - a
+        if n_ph <= 0 or not len(dirs):
+            return seq
+        rng = np.random.default_rng(seed)
+        lo, hi = self.n_bursts
+        k = int(rng.integers(lo, hi + 1))
+        L = max(4, int(self.burst_frac * n_ph))
+        slot = n_ph // max(k, 1)
+        if slot <= L + 2:                    # phase 가 짧으면 버스트 수를 줄인다
+            k = max(1, n_ph // (L + 3))
+            slot = n_ph // k
+        for i in range(k):
+            s0 = a + i * slot + int(rng.integers(0, max(1, slot - L)))
+            d = np.asarray(dirs[int(rng.integers(len(dirs)))], float)
+            amp = float(rng.uniform(0.7, 1.3))
+            Li = min(L, b - s0)
+            if Li < 3:
+                continue
+            env = np.sin(np.pi * (np.arange(Li) + 0.5) / Li)
+            seq[s0:s0 + Li] = amp * env[:, None] * d[None, :]
         return seq
 
     def seq_random(self, phase, d, seed):
@@ -238,6 +286,26 @@ def family_specs(r, phase, cands, args):
     Ablation A(등방 Gaussian vs FCM 방향)도 두 조건이 구별되지 않는다 —
     후보 절반이 rand* 였으므로 합산 결과는 이미 절반이 등방 Gaussian 이다.
     """
+    if r.inject_mode == "burst":
+        # 방해 방향 '집합' 전체를 쓴다: 버스트마다 그 안에서 랜덤으로 하나.
+        # family = demo × phase × seed (후보별이 아님) — 사용자가 그린
+        # sidetrack 주입 그대로다: "집합들을 찾으면 액션들을 아무거나 랜덤으로".
+        dirs = []
+        for c in cands[:args.top_k]:
+            d = np.asarray(c["direction"], float)
+            m = float(np.abs(d).max())
+            if m > 1e-9:
+                dirs.append(d / m)
+        if not dirs:
+            return []
+        specs = []
+        for si in range(args.n_seeds):
+            cand = dict(candidate_id=f"p{phase}_burst{si}", mode="burst",
+                        sources=[c["candidate_id"] for c in cands[:args.top_k]],
+                        names=[c.get("name", "") for c in cands[:args.top_k]],
+                        n_dirs=len(dirs), seed=args.seed + si)
+            specs.append((cand, r.seq_burst(phase, dirs, args.seed + si)))
+        return specs
     if r.inject_mode == "top1":
         specs = []
         for c in cands[:args.top_k]:
@@ -380,7 +448,9 @@ def build_runners(entries, boundaries, args, log=print):
             mk, e["eef_pos"], e["actions"][:len(e["F"]) - 1], zseg[:-1],
             e["goal"], float(e["obj_pos"][0, 2]), e["dt"],
             kp=args.kp, pos_scale=args.pos_scale, max_stretch=args.max_stretch,
-            inject_mode=args.inject_mode, p_inject=args.p_inject)
+            inject_mode=args.inject_mode, p_inject=args.p_inject,
+            n_bursts=(args.min_bursts, args.max_bursts),
+            burst_frac=args.burst_frac)
     return runners, env
 
 
@@ -412,6 +482,8 @@ def run(args):
                 lam_cap=args.lam_cap,
                 kp=args.kp, pos_scale=args.pos_scale, top_k=args.top_k,
                 inject_mode=args.inject_mode, p_inject=args.p_inject,
+                n_bursts=[args.min_bursts, args.max_bursts],
+                burst_frac=args.burst_frac,
                 n_seeds=args.n_seeds, w_thresh=args.w_thresh,
                 demos=[e["demo_id"] for e in entries])
     out = os.path.join(args.out_dir, "degradation.npz")
@@ -668,6 +740,62 @@ def run_selftest():
     if not np.allclose(seq, r05.seq_set(1, w2, seed=1)):
         ok = False; print("[FAIL] seed 고정 재현성 위반 (nested ladder 깨짐)")
 
+    # burst 모드 (기본): excursion 구조 검사
+    r_bu = FamilyRunner(mk, demo_eef[:-1], demo_A, zseg, goal, 0.85, 0.05,
+                        kp=0.8, pos_scale=0.01, inject_mode="burst",
+                        n_bursts=(2, 4), burst_frac=0.12)
+    dirs2 = [np.eye(7)[0], np.eye(7)[2]]           # +x, +z 두 방향의 집합
+    seqb = r_bu.seq_burst(1, dirs2, seed=5)
+    a_, b_ = r_bu._phase_span(1)
+    nz = np.abs(seqb).sum(axis=1) > 0
+    # (a) phase 밖 주입 없음
+    if nz[:a_].any() or nz[b_:].any():
+        ok = False; print("[FAIL] burst 가 phase 밖에 주입")
+    # (b) 연속 run 으로 나뉘고 (2~4개), 사이에 깨끗한 구간이 있다
+    runs, s = [], None
+    for i in range(len(nz)):
+        if nz[i] and s is None: s = i
+        if not nz[i] and s is not None: runs.append((s, i)); s = None
+    if s is not None: runs.append((s, len(nz)))
+    gaps = (b_ - a_) - sum(e - st for st, e in runs)
+    if not (1 <= len(runs) <= 4 and gaps > 0):
+        ok = False; print(f"[FAIL] burst 구조: runs={len(runs)}, 깨끗한 스텝={gaps}")
+    # (c) 각 버스트는 집합 중 '한' 방향과 정확히 평행 + half-sine 엔벨로프
+    #     (양끝보다 중간이 큼)
+    for st_, e_ in runs:
+        seg = seqb[st_:e_]
+        coss = [max(abs(float(np.dot(row, d))) / (np.linalg.norm(row) + 1e-12)
+                    for d in dirs2) for row in seg]
+        if min(coss) < 1.0 - 1e-9:
+            ok = False; print("[FAIL] burst 방향이 집합 원소와 평행하지 않음")
+        mag = np.linalg.norm(seg, axis=1)
+        if not (mag[len(mag)//2] > mag[0] and mag[len(mag)//2] > mag[-1]):
+            ok = False; print("[FAIL] burst 엔벨로프가 half-sine 이 아님")
+    # (d) seed 재현성 (nested ladder 전제)
+    if not np.allclose(seqb, r_bu.seq_burst(1, dirs2, seed=5)):
+        ok = False; print("[FAIL] burst seed 재현성 위반")
+    # (e) 두 방향이 실제로 섞여 쓰이는가 (여러 seed 에 걸쳐)
+    used = set()
+    for sd in range(6):
+        sq = r_bu.seq_burst(1, dirs2, seed=sd)
+        for row in sq[np.abs(sq).sum(axis=1) > 0]:
+            used.add(int(np.argmax(np.abs(row))))
+    if used != {0, 2}:
+        ok = False; print(f"[FAIL] burst 가 집합의 방향들을 안 섞음: {used}")
+    print(f"burst 모드: {len(runs)}개 excursion, 깨끗한 스텝 {gaps}, "
+          f"방향 사용 축={sorted(used)}, half-sine·seed 재현 OK")
+    # (f) family_specs 경로: family = seed 당 1개 (후보별이 아님)
+    class AB(A):
+        n_seeds = 2
+    specs_b = family_specs(r_bu, 1, [
+        dict(candidate_id="p1_c000", direction=[1, 0, 0, 0, 0, 0, 0]),
+        dict(candidate_id="p1_c001", direction=[0, 0, 1, 0, 0, 0, 0])], AB)
+    if len(specs_b) != 2 or specs_b[0][0]["n_dirs"] != 2:
+        ok = False; print(f"[FAIL] burst family_specs: {len(specs_b)}개")
+    else:
+        print(f"burst family_specs: seed 당 1 family × {AB.n_seeds} "
+              f"(방향 {specs_b[0][0]['n_dirs']}개 공유)")
+
     # phase_component_set: 상쇄·소수성분 제거 확인
     cs = [dict(direction=[1, 0, 0.6, 0, 0, 0, 0]),
           dict(direction=[-1, 0, 0.6, 0, 0.1, 0, 0])]
@@ -711,13 +839,19 @@ def main():
     ap.add_argument("--kp", type=float, default=0.1)
     ap.add_argument("--pos-scale", type=float, default=0.01)
     ap.add_argument("--max-stretch", type=float, default=1.5)
-    ap.add_argument("--inject-mode", default="top1",
-                    choices=["top1", "set", "random", "window"],
-                    help="top1: Stage 7 후보를 합산하지 않고 각각 독립 family "
-                         "(기본 — FCM 랭킹을 보존한다). "
-                         "set: 성분 집합을 스텝별 랜덤 조합 (ablation). "
-                         "random: 후보 방향 1개를 스텝별 Bernoulli (ablation). "
-                         "window: Stage 7 창에서 결정적 (ablation)")
+    ap.add_argument("--inject-mode", default="burst",
+                    choices=["burst", "top1", "set", "random", "window"],
+                    help="burst (기본): 방해 방향 '집합'에서 버스트마다 랜덤 "
+                         "방향을 뽑아 이탈-복귀 excursion 주입 — suboptimal "
+                         "데모 모양 (sidetrack). "
+                         "top1: 후보별 상수 바이어스 (드리프트형; ablation). "
+                         "set/random/window: ablation")
+    ap.add_argument("--min-bursts", type=int, default=2,
+                    help="burst: phase 당 excursion 최소 개수")
+    ap.add_argument("--max-bursts", type=int, default=4,
+                    help="burst: phase 당 excursion 최대 개수")
+    ap.add_argument("--burst-frac", type=float, default=0.12,
+                    help="burst: excursion 하나의 길이 = frac × phase 길이")
     ap.add_argument("--with-cliff", action="store_true", default=True,
                     help="λ_fail 에 cliff rung 을 하나 추가 (기본 on)")
     ap.add_argument("--no-cliff", dest="with_cliff", action="store_false",

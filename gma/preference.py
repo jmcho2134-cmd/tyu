@@ -73,11 +73,23 @@ def measured_metrics(traj, goal, rho_end):
         lam=float(traj["lam"]))
 
 
-def damage_of(m, m0, goal_scale=0.10):
-    """λ=0 rung (m0) 대비 실측 열화 스칼라. 클수록 나쁘다."""
+def damage_of(m, m0, goal_scale=0.10, path_w=1.0):
+    """λ=0 rung (m0) 대비 실측 열화 스칼라. 클수록 나쁘다.
+
+    경로 항 d_path = 상대 경로 증가율 (Δpath/path0). burst 주입에서 필수다:
+    excursion 은 이탈했다가 데모 경로로 '복귀'하므로 phase 끝점이 깨끗해져
+    success·goal_err·ρ_end 가 전부 λ=0 과 같아진다 — 구 라벨은 우회를 원리적
+    으로 볼 수 없다 (실측: post phase 0/120 전멸의 절반이 '무반응'이었고,
+    문서가 "순수 효율 family (post 후퇴 열화가 전형)"라 정의한 부류가 정확히
+    여기 해당한다). 경로 증가는 시뮬레이터 실측이므로 D8(실측 Δ가 라벨)과
+    정합하고, λ 는 여전히 라벨에 없다. R_θ 의 입력에는 path_length 가 없으므로
+    (fs.REWARD_INPUT) 연산자 되돌리기 지름길도 아니다."""
     d_goal = (m["final_goal_err"] - m0["final_goal_err"]) / goal_scale
     d_rho = max(0.0, m0["rho_end"] - m["rho_end"])
-    return 2.0 * (1.0 - float(m["success"])) + d_goal + d_rho
+    d_path = max(0.0, (m["path_length"] - m0["path_length"])
+                 / max(m0["path_length"], 1e-6))
+    return (2.0 * (1.0 - float(m["success"])) + d_goal + d_rho
+            + path_w * d_path)
 
 
 def spearman(x, y):
@@ -144,7 +156,8 @@ def gate_family(fam, metrics, demo_eef, args):
     for a, b in zip(succ, succ[1:]):
         if b and not a:
             return False, f"success 역전 {''.join('o' if s else 'x' for s in succ)}"
-    dmg = [damage_of(m, m0, args.goal_scale) for m in metrics]
+    dmg = [damage_of(m, m0, args.goal_scale,
+                     getattr(args, "path_w", 1.0)) for m in metrics]
     # 순위상관은 rung 인덱스로 본다 (level 값이 family 마다 달라도 무관하고,
     # cliff rung 이 붙어 rung 수가 변해도 성립한다).
     rho = spearman(list(range(len(dmg))), dmg)
@@ -182,7 +195,8 @@ def make_pairs(row_ids, metrics, args, kinds=None):
     Stage 10 이 두 집합에 다른 가중치를 줄 수 있게 라벨만 붙여 둔다.
     """
     m0 = metrics[0]
-    dmg = [damage_of(m, m0, args.goal_scale) for m in metrics]
+    dmg = [damage_of(m, m0, args.goal_scale,
+                     getattr(args, "path_w", 1.0)) for m in metrics]
     kinds = list(kinds) if kinds is not None else ["eff"] * len(metrics)
     pairs, skipped = [], 0
     for i in range(len(metrics)):
@@ -220,7 +234,8 @@ def build(families, goals, demo_eefs, args, log=print):
                    for t, r in zip(fam["trajectories"], fam["rho_endpoint"])]
         okay, reason = gate_family(fam, metrics, demo_eefs.get(did), args)
         m0 = metrics[0]
-        step = gradedness([damage_of(m, m0, args.goal_scale)
+        step = gradedness([damage_of(m, m0, args.goal_scale,
+                                     getattr(args, "path_w", 1.0))
                            for m, k in zip(metrics, kinds) if k == "eff"])[0]
         diag.append(dict(
             family_id=fam["family_id"], phase_id=int(fam["phase_id"]),
@@ -229,7 +244,8 @@ def build(families, goals, demo_eefs, args, log=print):
             lambda_fail=(None if fam.get("lambda_fail") is None
                          else float(fam["lambda_fail"])),
             rung_kind=kinds, level_fracs=fracs, min_step_frac=float(step),
-            damage=[damage_of(m, m0, args.goal_scale) for m in metrics],
+            damage=[damage_of(m, m0, args.goal_scale,
+                              getattr(args, "path_w", 1.0)) for m in metrics],
             success=[m["success"] for m in metrics]))
         log(f"  {'ACCEPT' if okay else 'reject':<7} {fam['family_id']:<26} "
             f"{reason}")
@@ -439,15 +455,19 @@ def viz_g8(diag, pairs, out_png):
 # SECTION 5 — selftest (mock family; 파일 불필요)
 # ===========================================================================
 def _mock_family(fid, phase, dmg_profile, succ_profile, goal, T=40,
-                 kinds=None, fracs=None):
-    """damage/success 프로파일을 실측 메트릭으로 역산한 가짜 family."""
+                 kinds=None, fracs=None, path_profile=None):
+    """damage/success 프로파일을 실측 메트릭으로 역산한 가짜 family.
+
+    path_profile[i] = rung i 의 상대 경로 증가율 (Δpath/path0). burst 주입의
+    '우회 열화' — 끝점은 깨끗하고 경로만 길어진 rung — 를 흉내낸다."""
     ji, si = fs.index_of("eef_jerk"), fs.index_of("object_slip")
     NF = fs.N_FEATURES
     fracs = list(fracs) if fracs is not None else list(LEVELS)
     kinds = list(kinds) if kinds is not None else ["eff"] * len(dmg_profile)
+    pp = list(path_profile) if path_profile is not None else [0.0] * len(fracs)
     trajs, rhos = [], []
-    for lv, dg, sc in zip(fracs, dmg_profile, succ_profile):
-        eef = np.cumsum(np.full((T, 3), 0.01), axis=0)
+    for lv, dg, sc, pf in zip(fracs, dmg_profile, succ_profile, pp):
+        eef = np.cumsum(np.full((T, 3), 0.01 * (1.0 + pf)), axis=0)
         obj = np.zeros((T, 3))
         # damage 는 final_goal_err 로 실어 나른다 (성공 항은 succ 로)
         residual = dg - 2.0 * (1.0 - float(sc))
@@ -478,6 +498,7 @@ def run_selftest():
         min_spearman, min_spread = 0.6, 0.15
         max_repro, accept_frac, min_pairs = 0.02, 0.4, 3
         min_step_frac, min_eff_pair_frac = 0.08, 0.5
+        path_w = 1.0
 
     EFF5 = ["eff"] * 5
     EFF5C = ["eff"] * 5 + ["cliff"]
@@ -500,6 +521,12 @@ def run_selftest():
                      [1, 1, 1, 1, 1], goal, kinds=EFF5),
         _mock_family("d0:good3", 2, [0, .5, 1.0, 1.5, 2.0],
                      [1, 1, 1, 1, 1], goal, kinds=EFF5),
+        # ★ burst 형 우회 열화: 끝점 깨끗(goal_err·ρ 동일, 전 rung 성공),
+        #   경로만 10~40% 길어짐. path 항이 없으면 spread=0 무반응으로 기각
+        #   — 그게 post phase 0/120 전멸의 재현이다. path 항이 이걸 살린다.
+        _mock_family("d0:detour", 2, [0, 0, 0, 0, 0],
+                     [1, 1, 1, 1, 1], goal, kinds=EFF5,
+                     path_profile=[0, .1, .2, .3, .4]),
     ]
     goals = {"d0": goal}
     demo_eefs = {"d0": np.cumsum(np.full((40, 3), 0.01), axis=0)}
@@ -509,7 +536,7 @@ def run_selftest():
     acc = {d["family_id"]: d["accepted"] for d in diag}
     expect = {"d0:good": True, "d0:flat": False, "d0:nonmono": False,
               "d0:inv": False, "d0:good2": True, "d0:cliffy": False,
-              "d0:good3": True}
+              "d0:good3": True, "d0:detour": True}
     for k, v in expect.items():
         if acc[k] != v:
             ok = False
@@ -519,6 +546,8 @@ def run_selftest():
     print(f"gate: {sum(acc.values())}/{len(fams)} 수락 (기대 {n_expect})")
     print(f"  R5 계단성: d0:cliffy 기각 — "
           f"{next(d['reason'] for d in diag if d['family_id']=='d0:cliffy')}")
+    print(f"  경로 항: d0:detour (끝점 깨끗, 경로만 증가) — "
+          f"{next(d['reason'] for d in diag if d['family_id']=='d0:detour')}")
 
     # λ=0 dedupe: 수락 family 4개인데 λ=0 행은 데모당 1개여야 한다
     n_zero = sum(1 for r in rows if r["level"] == 0.0)
@@ -590,6 +619,9 @@ def main():
                     help="pair 성립에 필요한 최소 damage 차이")
     ap.add_argument("--goal-scale", type=float, default=0.10,
                     help="final_goal_err 정규화 스케일 [m]")
+    ap.add_argument("--path-w", type=float, default=1.0,
+                    help="damage 의 경로 항 가중치 (Δpath/path0). burst 주입의 "
+                         "우회 열화를 보는 유일한 항 — damage_of 주석 참조")
     ap.add_argument("--min-spearman", type=float, default=0.6)
     ap.add_argument("--min-spread", type=float, default=0.15)
     ap.add_argument("--min-step-frac", type=float, default=0.08,
